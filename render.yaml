@@ -1,0 +1,41 @@
+services:
+  # ── ORM CMS Backend (FastAPI + SQLite) ──────────────────────────
+  - type: web
+    name: orm-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        value: sqlite:///./data/orm.db
+      - key: APP_ENV
+        value: production
+      - key: APP_SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET
+        generateValue: true
+      - key: APP_ALLOWED_ORIGINS
+        value: https://orm-ui.onrender.com,http://localhost:3000,http://localhost:3001
+      - key: REDIS_URL
+        value: redis://localhost:6379/0
+      - key: OPENSEARCH_HOST
+        value: http://localhost:9200
+      - key: MINIO_ENDPOINT
+        value: localhost:9000
+      - key: RECAPTCHA_ENABLED
+        value: "false"
+
+  # ── ORM CMS Frontend (Next.js 15 standalone) ────────────────────
+  - type: web
+    name: orm-ui
+    runtime: docker
+    dockerfilePath: ./frontend/Dockerfile
+    dockerContext: ./frontend
+    plan: free
+    buildArgs:
+      - key: NEXT_PUBLIC_API_URL
+        value: https://orm-api.onrender.com/api/v1
+    envVars:
+      - key: NODE_ENV
+        value: production

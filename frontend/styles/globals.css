@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f5f5f7;
+  --card: #ffffff;
+  --fg: #1d1d1f;
+  --muted: #86868b;
+  --border: #e5e5e7;
+}
+.dark {
+  --bg: #000000;
+  --card: #1c1c1e;
+  --fg: #f5f5f7;
+  --muted: #98989d;
+  --border: #2c2c2e;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: Inter, system-ui, sans-serif;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+@media print {
+  /* Hide the entire dashboard shell — sidebar, header, etc. */
+  body > * { display: none !important; }
+  /* Only show the hidden print report div */
+  #orm-print-report {
+    display: block !important;
+    color: #000 !important;
+    background: #fff !important;
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    padding: 20px;
+  }
+  #orm-print-report * { color: inherit; background: transparent; }
+  @page { margin: 20mm; }
+}
