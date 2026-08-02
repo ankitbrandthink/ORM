@@ -1,0 +1,27 @@
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/**/*.pyc
+backend/.env
+backend/*.db
+
+# Node / Next.js
+frontend-src/node_modules/
+frontend-src/.next/cache/
+frontend-src/*.tar.gz
+frontend-src/*.zip
+frontend-src/.wwebjs_cache/
+frontend/.next/cache/
+frontend/node_modules/
+
+# Uploads & data
+uploads/
+
+# Secrets
+*.env.local
+*.env.production.local
+
+# OS
+.DS_Store
+Thumbs.db
