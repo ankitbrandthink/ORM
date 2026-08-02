@@ -15,8 +15,10 @@ frontend-src/.wwebjs_cache/
 frontend/.next/cache/
 frontend/node_modules/
 
-# Uploads & data
+# Uploads & runtime data (never commit API keys / config)
 uploads/
+backend/app/data/
+backend/data/
 
 # Secrets
 *.env.local
