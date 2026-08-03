@@ -566,20 +566,39 @@ def client_summary(current: CurrentUser = Depends(get_current_user),
         .all()
     )
     press_counts: dict = {str(cid): cnt for cid, cnt in ps_rows}
+    client_ids = [c.id for c in clients]
+
+    # Post counts per client — single query for all clients
+    post_count_rows = (
+        db.query(Post.client_id, func.count(Post.id))
+        .filter(Post.client_id.in_(client_ids), Post.is_deleted == False)
+        .group_by(Post.client_id)
+        .all()
+    )
+    post_counts_map: dict = {str(cid): cnt for cid, cnt in post_count_rows}
+
+    # Sentiment breakdown per client — single joined query, no Python IN list
+    sent_rows = (
+        db.query(Post.client_id, CommentAnalysis.sentiment, func.count())
+        .join(Comment, Comment.post_id == Post.id)
+        .join(CommentAnalysis, CommentAnalysis.comment_id == Comment.id)
+        .filter(Post.client_id.in_(client_ids), Post.is_deleted == False)
+        .group_by(Post.client_id, CommentAnalysis.sentiment)
+        .all()
+    )
+    # Build {client_id -> {sentiment -> count}}
+    sent_map: dict = {}
+    for cid, sentiment, cnt in sent_rows:
+        key = str(cid)
+        sent_map.setdefault(key, {})[sentiment or "Unknown"] = cnt
+
     result = []
     for c in clients:
-        post_ids = [r[0] for r in db.query(Post.id).filter(
-            Post.client_id == c.id, Post.is_deleted == False).all()]
-        post_count = len(post_ids)
-        rows = (db.query(CommentAnalysis.sentiment, func.count())
-                .join(Comment, Comment.id == CommentAnalysis.comment_id)
-                .filter(Comment.post_id.in_(post_ids))
-                .group_by(CommentAnalysis.sentiment).all()) if post_ids else []
-        counts = {s or "Unknown": cnt for s, cnt in rows}
+        counts = sent_map.get(str(c.id), {})
         total = sum(counts.values()) or 1
         result.append({
             "id": c.id, "name": c.name, "industry": c.industry,
-            "posts": post_count,
+            "posts": post_counts_map.get(str(c.id), 0),
             "comments": sum(counts.values()),
             "counts": counts,
             "percentages": {k: round(v * 100 / total, 1) for k, v in counts.items()},
