@@ -3,7 +3,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
-  LayoutDashboard, Radio, Ticket, BarChart3, FileText, Building2, Settings, ChevronLeft, Upload, BellRing, CalendarDays, Users, RefreshCw, Layers, Rss, MonitorCheck, MessageSquare,
+  LayoutDashboard, Radio, BarChart3, FileText, Building2, Settings, ChevronLeft,
+  Upload, BellRing, CalendarDays, Users, Layers, Rss, MonitorCheck, MessageSquare,
+  CreditCard, FileBarChart2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -11,16 +13,18 @@ const NAV = [
   { href: "/", label: "Home", desc: "Snapshot & insights", icon: LayoutDashboard },
   { href: "/admin/clients", label: "Clients & Accounts", desc: "Add brands & social pages", icon: Building2 },
   { href: "/listening", label: "Posts & Comments", desc: "Add post links & read sentiment", icon: Radio },
-  { href: "/analytics", label: "Insights", desc: "Charts & trends", icon: BarChart3 },
-  { href: "/press", label: "Press & News", desc: "RSS feeds & news articles", icon: Rss },
+  { href: "/analytics", label: "Social Insights", desc: "Narrative briefing & trends", icon: BarChart3 },
+  { href: "/press", label: "Press Sources", desc: "RSS feeds & news channels", icon: Rss },
   { href: "/orm", label: "ORM Queue", desc: "Reply & ticket management", icon: MessageSquare },
   { href: "/reports/daily", label: "Daily Reports", desc: "EOD & sentiment per client", icon: CalendarDays },
+  { href: "/reports/eod", label: "EOD Report", desc: "Comment deployment reports — per-client PDF", icon: FileBarChart2 },
   { href: "/reports", label: "Reports", desc: "Download & share PDFs", icon: FileText },
   { href: "/import", label: "Import Data", desc: "Google Sheets & CSV", icon: Upload },
   { href: "/admin/alerts", label: "WA Alerts", desc: "WhatsApp notifications", icon: BellRing },
   { href: "/admin/contacts", label: "Alert Contacts", desc: "Who gets notified", icon: Users },
   { href: "/admin/settings/social-sync", label: "Social Sync", desc: "Auto-fetch posts & comments", icon: Layers },
-  { href: "/admin/sessions", label: "Live Sessions", desc: "Active logins & device access", icon: MonitorCheck },
+  { href: "/admin/billing", label: "API Usage & Billing", desc: "Claude token consumption & cost", icon: CreditCard },
+  { href: "/admin/sessions", label: "Active Sessions", desc: "Devices & login locations", icon: MonitorCheck },
   { href: "/admin/users", label: "Settings", desc: "Team & access", icon: Settings },
 ];
 
