@@ -145,6 +145,15 @@ def trigger_sync(
     job_id = _job_id()
     _status(job_id, "queued")
 
+    # Persist "queued" to DB immediately so any worker's status poll sees it
+    from sqlalchemy.orm.attributes import flag_modified
+    meta = dict(p.meta or {})
+    meta["sync_status"] = "queued"
+    meta["current_job_id"] = job_id
+    p.meta = meta
+    flag_modified(p, "meta")
+    db.commit()
+
     def _worker():
         try:
             asyncio.run(_run_sync(

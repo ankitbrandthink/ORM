@@ -215,30 +215,45 @@ function ProfileCard({ profile, onSyncDone }: { profile: SyncProfile; onSyncDone
 
   useEffect(() => { loadPosts(); }, [loadPosts]);
 
-  const pollStatus = useCallback(async (jobId: string) => {
+  const pollStatus = useCallback(async (_jobId: string) => {
+    // Poll the DB-backed profile status endpoint — works across all uvicorn workers.
+    // The in-memory /sync/status/{job_id} only lives in one worker process.
+    let seenActive = false;
+    const startedAt = Date.now();
     for (let i = 0; i < 180; i++) {
       await new Promise(r => setTimeout(r, 3000));
       try {
-        const r = await fetch(`${API}/sync/status/${jobId}`, {
+        const r = await fetch(`${API}/social-sync/profiles/${profile.id}/status`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!r.ok) continue;
         const data = await r.json();
-        setProgress({ done: data.posts_done || 0, total: data.total_posts || 0, comments: data.comments_done || 0 });
-        if (data.stage === "done" || data.stage === "error") {
-          setSyncing(false);
-          setCurrentStatus(data.error ? "error" : "done");
-          setSyncError(data.error || null);
-          setLastSynced(new Date().toISOString());
-          // Refresh counts
-          const sr = await fetch(`${API}/social-sync/profiles/${profile.id}/status`, {
-            headers: { Authorization: `Bearer ${token}` },
+        const stage: string = data.sync_status || "idle";
+
+        if (["queued", "running", "syncing", "storing"].includes(stage)) {
+          seenActive = true;
+          setProgress({
+            done: data.sync_posts_done || 0,
+            total: data.sync_total_posts || 0,
+            comments: data.sync_comments_done || 0,
           });
-          if (sr.ok) {
-            const sd = await sr.json();
-            setPostCount(sd.post_count || 0);
-            setCommentCount(sd.comment_count || 0);
-          }
+        }
+        if (stage === "error") {
+          setSyncing(false);
+          setCurrentStatus("error");
+          setSyncError(data.sync_error || "Sync failed");
+          return;
+        }
+        // Detect completion: either we observed an active stage, or last_synced is
+        // timestamped after we started (handles sub-3-second syncs).
+        const lastSyncMs = data.last_synced ? new Date(data.last_synced).getTime() : 0;
+        if (stage === "done" && (seenActive || lastSyncMs >= startedAt)) {
+          setSyncing(false);
+          setCurrentStatus("done");
+          setSyncError(null);
+          setLastSynced(data.last_synced || new Date().toISOString());
+          setPostCount(data.post_count || 0);
+          setCommentCount(data.comment_count || 0);
           await loadPosts();
           onSyncDone();
           return;
