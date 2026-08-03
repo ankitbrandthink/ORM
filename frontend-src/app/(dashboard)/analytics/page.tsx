@@ -73,19 +73,19 @@ export default function AnalyticsPage() {
     setTrend([]);
     setWords([]);
     setTopics([]);
-    Promise.all([
+    Promise.allSettled([
       api.get("/analytics/sentiment-overview", { params: p }),
       api.get("/analytics/emotion-breakdown",  { params: p }),
       api.get("/analytics/trend",              { params: p }),
       api.get("/analytics/word-frequency",     { params: p }),
       api.get("/analytics/topic-clusters",     { params: p }),
     ]).then(([s, e, t, w, tc]) => {
-      setSentiment(s.data);
-      setEmotion(e.data);
-      setTrend(t.data.trend || []);
-      setWords(w.data.words || []);
-      setTopics(tc.data.clusters || []);
-    }).catch(() => {}).finally(() => setLoading(false));
+      if (s.status === "fulfilled") setSentiment(s.value.data);
+      if (e.status === "fulfilled") setEmotion(e.value.data);
+      if (t.status === "fulfilled") setTrend(t.value.data?.trend || []);
+      if (w.status === "fulfilled") setWords(w.value.data?.words || []);
+      if (tc.status === "fulfilled") setTopics(tc.value.data?.clusters || []);
+    }).finally(() => setLoading(false));
   }, [clientId]);
 
   async function startTraining() {
