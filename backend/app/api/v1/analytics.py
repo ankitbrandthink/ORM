@@ -617,34 +617,39 @@ def press_feed(
     press_source_id: Optional[str] = Query(None),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
     current: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Return press articles (RSS + YouTube channel) for a client, paginated."""
     press_kinds = ("press_rss", "youtube_channel_video")
 
-    q = db.query(Post).filter(
+    query = db.query(Post).filter(
         Post.tenant_id == current.tenant_id,
         Post.source_kind.in_(press_kinds),
         Post.is_deleted == False,
     )
     if client_id:
-        q = q.filter(Post.client_id == client_id)
+        query = query.filter(Post.client_id == client_id)
     if press_source_id:
-        q = q.filter(Post.press_source_id == press_source_id)
+        query = query.filter(Post.press_source_id == press_source_id)
     if date_from:
         try:
-            q = q.filter(Post.published_at >= datetime.fromisoformat(date_from.replace("Z", "+00:00")))
+            query = query.filter(Post.published_at >= datetime.fromisoformat(date_from.replace("Z", "+00:00")))
         except ValueError:
             pass
     if date_to:
         try:
-            q = q.filter(Post.published_at <= datetime.fromisoformat(date_to.replace("Z", "+00:00")))
+            query = query.filter(Post.published_at <= datetime.fromisoformat(date_to.replace("Z", "+00:00")))
         except ValueError:
             pass
+    if q:
+        keywords = [k.strip() for k in re.split(r"[,\s]+", q) if len(k.strip()) >= 2]
+        for kw in keywords:
+            query = query.filter(Post.content.ilike(f"%{kw}%"))
 
-    total = q.count()
-    posts = q.order_by(Post.published_at.desc()).offset(offset).limit(limit).all()
+    total = query.count()
+    posts = query.order_by(Post.published_at.desc()).offset(offset).limit(limit).all()
 
     post_ids = [p.id for p in posts]
 
