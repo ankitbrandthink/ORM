@@ -52,11 +52,29 @@ export default function HomePage() {
     return () => clearInterval(id);
   }, []);
 
+  // Load cached dashboard data from localStorage (shows instantly before API responds)
+  const loadCache = useCallback((cid: string) => {
+    try {
+      const raw = localStorage.getItem(`dashboard_cache_${cid}`);
+      if (!raw) return false;
+      const cache = JSON.parse(raw);
+      if (cache.sentiment) setSentiment(cache.sentiment);
+      if (cache.emotion)   setEmotion(cache.emotion);
+      if (cache.trend)     setTrend(cache.trend);
+      if (cache.crisis)    setCrisis(cache.crisis);
+      if (cache.summary)   setSummary(cache.summary);
+      if (cache.tickets)   setTickets(cache.tickets);
+      return true;
+    } catch { return false; }
+  }, []);
+
   const refreshData = useCallback(async (id?: string) => {
     const cid = id ?? clientId;
     if (!cid) return;
     setSyncing(true);
-    setLoading(true);
+    // Show cache immediately; only show spinner if no cache
+    const hasCached = loadCache(cid);
+    if (!hasCached) setLoading(true);
     try {
       const p = { client_id: cid };
       const [s, e, t, c, sum, tkt] = await Promise.allSettled([
@@ -67,12 +85,15 @@ export default function HomePage() {
         api.get("/analytics/client-summary"),
         api.get("/tickets"),
       ]);
-      if (s.status === "fulfilled") setSentiment(s.value.data);
-      if (e.status === "fulfilled") setEmotion(e.value.data);
-      if (t.status === "fulfilled") setTrend(t.value.data.trend || []);
-      if (c.status === "fulfilled") setCrisis(c.value.data);
-      if (sum.status === "fulfilled") setSummary(sum.value.data || []);
-      if (tkt.status === "fulfilled") setTickets(tkt.value.data || []);
+      const fresh: any = {};
+      if (s.status === "fulfilled") { setSentiment(s.value.data); fresh.sentiment = s.value.data; }
+      if (e.status === "fulfilled") { setEmotion(e.value.data);   fresh.emotion   = e.value.data; }
+      if (t.status === "fulfilled") { setTrend(t.value.data.trend || []); fresh.trend = t.value.data.trend || []; }
+      if (c.status === "fulfilled") { setCrisis(c.value.data);    fresh.crisis    = c.value.data; }
+      if (sum.status === "fulfilled") { setSummary(sum.value.data || []); fresh.summary = sum.value.data || []; }
+      if (tkt.status === "fulfilled") { setTickets(tkt.value.data || []); fresh.tickets = tkt.value.data || []; }
+      // Persist to localStorage so next load is instant
+      try { localStorage.setItem(`dashboard_cache_${cid}`, JSON.stringify(fresh)); } catch {}
       setLastSynced(new Date());
     } catch {
       // silent
@@ -80,7 +101,7 @@ export default function HomePage() {
       setSyncing(false);
       setLoading(false);
     }
-  }, [clientId]);
+  }, [clientId, loadCache]);
 
   // Initial load — clients then first data load
   useEffect(() => {

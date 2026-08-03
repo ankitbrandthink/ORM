@@ -1,17 +1,19 @@
 "use client";
 import axios from "axios";
 
-// Placeholder — overridden per-request in the interceptor below.
-// NEXT_PUBLIC_API_URL is baked at build time (may be localhost in dev builds),
-// so we always re-resolve from window.location in the browser at call time.
-export const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1",
-});
+// Use NEXT_PUBLIC_API_URL when set (covers both dev pointing at VPS and production).
+// Fall back to same-origin only when no env var is present (bare deployment with no .env).
+const RESOLVED_BASE =
+  process.env.NEXT_PUBLIC_API_URL ??
+  (typeof window !== "undefined"
+    ? `${window.location.protocol}//${window.location.host}/api/v1`
+    : "http://localhost:8000/api/v1");
+
+export const api = axios.create({ baseURL: RESOLVED_BASE });
 
 api.interceptors.request.use((config) => {
   if (typeof window !== "undefined") {
-    // Runtime override: always use the page's own origin — works on any domain/port.
-    config.baseURL = `${window.location.protocol}//${window.location.host}/api/v1`;
+    // Keep baseURL from module init — do NOT override with window.location.host.
     const token = localStorage.getItem("access_token");
     if (token) config.headers.Authorization = `Bearer ${token}`;
   }
@@ -27,10 +29,7 @@ api.interceptors.response.use(
       const refresh = localStorage.getItem("refresh_token");
       if (refresh) {
         try {
-          const base = typeof window !== "undefined"
-            ? `${window.location.protocol}//${window.location.host}/api/v1`
-            : (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1");
-          const { data } = await axios.post(`${base}/auth/refresh`, {
+          const { data } = await axios.post(`${RESOLVED_BASE}/auth/refresh`, {
             refresh_token: refresh,
           });
           localStorage.setItem("access_token", data.access_token);

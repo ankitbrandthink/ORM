@@ -6,11 +6,11 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-function apiBase() {
-  if (typeof window === "undefined") return process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
-  return `${window.location.protocol}//${window.location.host}/api/v1`;
-}
-const API = apiBase();
+const API =
+  process.env.NEXT_PUBLIC_API_URL ??
+  (typeof window !== "undefined"
+    ? `${window.location.protocol}//${window.location.host}/api/v1`
+    : "http://localhost:8000/api/v1");
 
 type SyncProfile = {
   id: string;
