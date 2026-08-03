@@ -22,7 +22,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins + ["http://localhost", "http://localhost:80"],
+    allow_origins=settings.allowed_origins + ["http://localhost", "http://localhost:80", "http://localhost:3000"],
     allow_origin_regex=r"https://([a-z0-9-]+\.)?(facebook|instagram|twitter|x|youtube)\.com",
     allow_credentials=True,
     allow_methods=["*"],
