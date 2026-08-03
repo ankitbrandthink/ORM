@@ -59,7 +59,7 @@ export default function HomePage() {
     setLoading(true);
     try {
       const p = { client_id: cid };
-      const [s, e, t, c, sum, tkt] = await Promise.all([
+      const [s, e, t, c, sum, tkt] = await Promise.allSettled([
         api.get("/analytics/sentiment-overview", { params: p }),
         api.get("/analytics/emotion-breakdown",  { params: p }),
         api.get("/analytics/trend",              { params: p }),
@@ -67,12 +67,12 @@ export default function HomePage() {
         api.get("/analytics/client-summary"),
         api.get("/tickets"),
       ]);
-      setSentiment(s.data);
-      setEmotion(e.data);
-      setTrend(t.data.trend || []);
-      setCrisis(c.data);
-      setSummary(sum.data || []);
-      setTickets(tkt.data || []);
+      if (s.status === "fulfilled") setSentiment(s.value.data);
+      if (e.status === "fulfilled") setEmotion(e.value.data);
+      if (t.status === "fulfilled") setTrend(t.value.data.trend || []);
+      if (c.status === "fulfilled") setCrisis(c.value.data);
+      if (sum.status === "fulfilled") setSummary(sum.value.data || []);
+      if (tkt.status === "fulfilled") setTickets(tkt.value.data || []);
       setLastSynced(new Date());
     } catch {
       // silent
