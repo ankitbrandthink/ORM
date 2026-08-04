@@ -52,6 +52,11 @@ async def _run_discovery(tenant_id: str, client_id: str, keyword: str, limit: in
             pro = anti = neutral = 0
             classified_posts: list[dict] = []
 
+            # Determine platform from first post (all tweets for a handle share platform)
+            platform = handle_tweets[0].get("platform", "twitter") if handle_tweets else "twitter"
+            if platform not in ("twitter", "reddit"):
+                platform = "twitter"
+
             for tw in handle_tweets[:5]:  # cap AI calls per handle
                 stance = await classify_stance(tw["content"], keyword, api_key)
                 if stance == "Pro":
@@ -69,13 +74,19 @@ async def _run_discovery(tenant_id: str, client_id: str, keyword: str, limit: in
             else:
                 overall = "Mixed"
 
+            # Build profile URL based on platform
+            if platform == "reddit":
+                profile_url = f"https://reddit.com/u/{handle}"
+            else:
+                profile_url = f"https://x.com/{handle}"
+
             # Upsert influencer
             inf = db.query(DiscoveredInfluencer).filter(
                 DiscoveredInfluencer.tenant_id == tenant_id,
                 DiscoveredInfluencer.client_id == client_id,
                 DiscoveredInfluencer.handle == handle,
                 DiscoveredInfluencer.keyword == keyword,
-                DiscoveredInfluencer.platform == "twitter",
+                DiscoveredInfluencer.platform == platform,
                 DiscoveredInfluencer.is_deleted == False,
             ).first()
 
@@ -89,9 +100,9 @@ async def _run_discovery(tenant_id: str, client_id: str, keyword: str, limit: in
                 inf = DiscoveredInfluencer(
                     tenant_id=tenant_id,
                     client_id=client_id,
-                    platform="twitter",
+                    platform=platform,
                     handle=handle,
-                    profile_url=f"https://x.com/{handle}",
+                    profile_url=profile_url,
                     keyword=keyword,
                     stance=overall,
                     positive_count=pro,
