@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Users, TrendingUp, TrendingDown, Minus, RefreshCw, ExternalLink,
   Newspaper, MessageSquare, Filter, Star, FileDown,
-  Zap, Info, Search, Twitter, X,
+  Zap, Info, Search, Twitter, Globe, ChevronDown, ChevronUp, X,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Card, Button, Badge } from "@/components/ui/primitives";
