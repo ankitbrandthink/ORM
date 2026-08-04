@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Users, TrendingUp, TrendingDown, Minus, RefreshCw, ExternalLink,
   Newspaper, MessageSquare, Filter, Star, AlertTriangle, FileDown,
-  Zap, Info,
+  Zap, Info, Search, Twitter, Globe, ChevronDown, ChevronUp, X,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Card, Button, Badge } from "@/components/ui/primitives";
@@ -81,6 +81,64 @@ function InfluencerCard({ inf, idx }: { inf: any; idx: number }) {
   );
 }
 
+function DiscoveredCard({ inf, onRemove }: { inf: any; onRemove: (id: string) => void }) {
+  const Icon = STANCE_ICON[inf.stance] ?? Minus;
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <Card className="space-y-3 border-l-4 border-l-purple-400">
+      <div className="flex items-start gap-3">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-100 dark:bg-purple-900/30 text-xs font-bold text-purple-600">
+          <Twitter className="h-4 w-4" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <a href={inf.profile_url} target="_blank" rel="noreferrer"
+              className="text-sm font-semibold text-accent hover:underline truncate">
+              @{inf.handle}
+            </a>
+            <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold flex items-center gap-1", STANCE_COLOR[inf.stance])}>
+              <Icon className="h-3 w-3" />{inf.stance}
+            </span>
+            <Badge className="bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 text-[10px]">
+              Discovered · Twitter
+            </Badge>
+          </div>
+          <div className="flex items-center gap-3 mt-1 text-xs text-muted">
+            <span className="font-medium">{inf.total_posts} tweets</span>
+            <span className="text-emerald-600 font-medium">+{inf.positive_count} pro</span>
+            <span className="text-red-500 font-medium">−{inf.negative_count} anti</span>
+            <span className="opacity-60">#{inf.keyword}</span>
+          </div>
+        </div>
+        <button onClick={() => onRemove(inf.id)} className="text-muted hover:text-red-500 shrink-0 transition-colors">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {inf.posts?.length > 0 && (
+        <>
+          <div className="space-y-1">
+            {inf.posts.slice(0, expanded ? 5 : 2).map((p: any, i: number) => (
+              <a key={i} href={p.url} target="_blank" rel="noreferrer"
+                className="flex items-start gap-1.5 text-[11px] text-muted hover:text-accent group">
+                <ExternalLink className="h-3 w-3 mt-0.5 shrink-0 group-hover:text-accent" />
+                <span className="line-clamp-2">{p.content || p.url}</span>
+              </a>
+            ))}
+          </div>
+          {inf.posts.length > 2 && (
+            <button onClick={() => setExpanded(!expanded)}
+              className="text-[10px] text-accent flex items-center gap-1 hover:underline">
+              {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+              {expanded ? "Show less" : `+${inf.posts.length - 2} more tweets`}
+            </button>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
 export default function InfluencersPage() {
   const [clients, setClients]   = useState<any[]>([]);
   const [clientId, setClientId] = useState("");
@@ -91,6 +149,15 @@ export default function InfluencersPage() {
   const [filter, setFilter]     = useState<"all" | "pro" | "anti">("all");
   const [typeFilter, setTypeFilter] = useState<"all" | "press" | "social">("all");
   const reportRef = useRef<HTMLDivElement>(null);
+
+  // Social discovery state
+  const [discoverKeyword, setDiscoverKeyword] = useState("");
+  const [discovering, setDiscovering]         = useState(false);
+  const [discoverStatus, setDiscoverStatus]   = useState("");
+  const [discovered, setDiscovered]           = useState<any[]>([]);
+  const [discoverKeywords, setDiscoverKeywords] = useState<string[]>([]);
+  const [activeKeyword, setActiveKeyword]     = useState<string | null>(null);
+  const [discoverLoading, setDiscoverLoading] = useState(false);
 
   useEffect(() => {
     api.get("/clients").then((r) => {
@@ -111,10 +178,58 @@ export default function InfluencersPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const loadDiscovered = useCallback((cid: string, kw?: string | null) => {
+    setDiscoverLoading(true);
+    const params: any = { client_id: cid };
+    if (kw) params.keyword = kw;
+    api.get("/social-listening/influencers", { params })
+      .then((r) => {
+        setDiscovered(r.data.influencers || []);
+        setDiscoverKeywords(r.data.keywords || []);
+      })
+      .catch(() => {})
+      .finally(() => setDiscoverLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (clientId) loadDiscovered(clientId, activeKeyword);
+  }, [clientId, activeKeyword, loadDiscovered]);
+
   function handleClientChange(id: string) {
     setClientId(id);
     const c = clients.find((c) => c.id === id);
     if (c) setClientName(c.name);
+    setActiveKeyword(null);
+  }
+
+  async function handleDiscover() {
+    if (!discoverKeyword.trim() || !clientId) return;
+    setDiscovering(true);
+    setDiscoverStatus("Searching Twitter/X for accounts talking about "" + discoverKeyword + ""…");
+    try {
+      await api.post("/social-listening/discover", {
+        client_id: clientId,
+        keyword: discoverKeyword.trim(),
+        platform: "twitter",
+        limit: 40,
+      });
+      setDiscoverStatus("Discovery running in background. Results will appear in 15–30 seconds.");
+      setDiscoverKeyword("");
+      // Poll once after 20s
+      setTimeout(() => {
+        loadDiscovered(clientId, activeKeyword);
+        setDiscoverStatus("");
+      }, 22000);
+    } catch {
+      setDiscoverStatus("Discovery failed. Please try again.");
+    } finally {
+      setDiscovering(false);
+    }
+  }
+
+  async function removeDiscovered(id: string) {
+    await api.delete(`/social-listening/influencers/${id}`).catch(() => {});
+    setDiscovered((prev) => prev.filter((d) => d.id !== id));
   }
 
   const allInfluencers = [
@@ -367,6 +482,106 @@ export default function InfluencersPage() {
           </div>
         </Card>
       )}
+
+      {/* ─── Social Discovery (Twitter/X keyword search) ─────────────────── */}
+      <div className="border-t border-border pt-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <Twitter className="h-5 w-5 text-[#1DA1F2]" /> Discover Social Influencers
+            </h2>
+            <p className="text-xs text-muted">
+              Search Twitter/X for real accounts talking about your client. AI classifies each as Pro or Anti.
+            </p>
+          </div>
+          {discovered.length > 0 && (
+            <Button variant="ghost" onClick={() => loadDiscovered(clientId, activeKeyword)} disabled={discoverLoading}>
+              <RefreshCw className={cn("h-4 w-4", discoverLoading && "animate-spin")} />
+            </Button>
+          )}
+        </div>
+
+        {/* Keyword input */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-[200px] max-w-xs">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted pointer-events-none" />
+            <input
+              type="text"
+              value={discoverKeyword}
+              onChange={(e) => setDiscoverKeyword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleDiscover()}
+              placeholder={`e.g. ${clientName || "BJP"}, #Congress, @narendramodi`}
+              className="w-full rounded-xl border border-border bg-card pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
+            />
+          </div>
+          <Button onClick={handleDiscover} disabled={discovering || !discoverKeyword.trim()}>
+            {discovering ? <RefreshCw className="h-4 w-4 animate-spin mr-1.5" /> : <Search className="h-4 w-4 mr-1.5" />}
+            Discover Now
+          </Button>
+        </div>
+
+        {discoverStatus && (
+          <div className="rounded-xl border border-purple-200 bg-purple-50 dark:border-purple-800/40 dark:bg-purple-900/10 px-4 py-2.5 text-xs text-purple-700 dark:text-purple-300 flex items-center gap-2">
+            {discovering && <RefreshCw className="h-3.5 w-3.5 animate-spin shrink-0" />}
+            {discoverStatus}
+          </div>
+        )}
+
+        {/* Keyword filter tabs */}
+        {discoverKeywords.length > 0 && (
+          <div className="flex flex-wrap gap-2 items-center">
+            <span className="text-xs text-muted">Filter by keyword:</span>
+            <button
+              onClick={() => setActiveKeyword(null)}
+              className={cn(
+                "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                activeKeyword === null ? "bg-accent text-white" : "bg-card border border-border text-muted hover:text-fg"
+              )}>
+              All
+            </button>
+            {discoverKeywords.map((kw) => (
+              <button key={kw} onClick={() => setActiveKeyword(kw)}
+                className={cn(
+                  "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                  activeKeyword === kw ? "bg-accent text-white" : "bg-card border border-border text-muted hover:text-fg"
+                )}>
+                #{kw}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Discovered influencer grid */}
+        {discoverLoading ? (
+          <div className="flex items-center justify-center gap-2 py-8 text-muted">
+            <RefreshCw className="h-5 w-5 animate-spin" />
+            <span className="text-sm">Loading discovered influencers…</span>
+          </div>
+        ) : discovered.length === 0 ? (
+          <Card className="py-8 text-center text-muted border-dashed">
+            <Globe className="mx-auto mb-2 h-8 w-8 opacity-25" />
+            <p className="text-sm font-medium">No social influencers discovered yet</p>
+            <p className="mt-1 text-xs max-w-xs mx-auto">
+              Enter a keyword above (e.g., "BJP", "#Congress", "Modi") and click Discover Now.
+              We'll search Twitter/X and classify accounts as Pro or Anti.
+            </p>
+          </Card>
+        ) : (
+          <>
+            <div className="flex items-center gap-3 text-sm">
+              <span className="font-medium">{discovered.length} accounts discovered</span>
+              <span className="text-emerald-600">{discovered.filter(d => d.stance === "Pro").length} Pro</span>
+              <span className="text-red-500">{discovered.filter(d => d.stance === "Anti").length} Anti</span>
+              <span className="text-muted">{discovered.filter(d => d.stance === "Mixed").length} Mixed</span>
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {discovered.map((inf) => (
+                <DiscoveredCard key={inf.id} inf={inf} onRemove={removeDiscovered} />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

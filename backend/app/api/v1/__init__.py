@@ -4,7 +4,7 @@ from app.api.v1 import (
     auth, users, clients, sources, monitors, posts, comments,
     analytics, tickets, reports, admin, health, profiles, import_data, connections,
     whatsapp_alerts, contacts, sync, sentiment, social_sync, press_sources, usage, ai_config,
-    sessions, training,
+    sessions, training, social_listening,
 )
 
 api_router = APIRouter()
@@ -33,3 +33,4 @@ api_router.include_router(usage.router, tags=["usage"])
 api_router.include_router(ai_config.router, tags=["ai-config"])
 api_router.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
 api_router.include_router(training.router, prefix="/analytics", tags=["training"])
+api_router.include_router(social_listening.router, tags=["social-listening"])
