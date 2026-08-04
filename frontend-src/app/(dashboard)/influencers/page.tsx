@@ -854,8 +854,8 @@ ${discoveredData.length>0 ? `<div class="rec"><strong>◈ ${discoveredData.lengt
                 <FileDown className="h-4 w-4 text-accent" /> Influencer Intelligence Report
               </h3>
               <p className="text-xs text-muted mt-0.5">
-                Download a full HTML report with all {allInfluencers.length} verified influencers, pro/anti breakdown,
-                mention counts and source links — ready to share with your client.
+                Download a comprehensive PDF with all voices (pro/anti/mixed), platform breakdown,
+                sentiment analysis, social listening insights &amp; reputation strategy — ready to share with your client.
               </p>
             </div>
             <Button onClick={downloadReport} className="shrink-0 flex items-center gap-2">
