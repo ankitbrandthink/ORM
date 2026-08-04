@@ -246,67 +246,126 @@ export default function InfluencersPage() {
   const socialCount = (data?.social || []).length;
   const viralThreshold = data?.viral_threshold ?? 10;
 
-  function downloadReport() {
+  async function downloadReport() {
     const date = new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
     const pros  = allInfluencers.filter((i) => i.stance === "Pro");
     const antis = allInfluencers.filter((i) => i.stance === "Anti");
     const mixed = allInfluencers.filter((i) => i.stance === "Mixed");
 
     const rows = (list: any[]) => list.map((inf, idx) => `
-      <tr>
-        <td style="padding:6px 10px;border-bottom:1px solid #eee;">#${idx + 1}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #eee;font-weight:600;">${inf.name}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #eee;">${inf.type === "press" ? "Media Outlet" : "Social"}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;">${inf.total_mentions.toLocaleString()}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #eee;color:#16a34a;text-align:right;">+${inf.positive_count}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #eee;color:#dc2626;text-align:right;">−${inf.negative_count}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #eee;">${inf.posts?.map((p: any) => p.url ? `<a href="${p.url}">${p.title || p.url}</a>` : "").filter(Boolean).join("<br>") || "—"}</td>
+      <tr style="background:${idx % 2 === 0 ? "#fff" : "#f9fafb"};">
+        <td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:10pt;">#${idx + 1}</td>
+        <td style="padding:5px 8px;border:1px solid #e5e7eb;font-weight:600;font-size:10pt;">${inf.name}</td>
+        <td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:10pt;">${inf.type === "press" ? "Media Outlet" : "Social"}</td>
+        <td style="padding:5px 8px;border:1px solid #e5e7eb;text-align:right;font-size:10pt;">${inf.total_mentions.toLocaleString()}</td>
+        <td style="padding:5px 8px;border:1px solid #e5e7eb;color:#16a34a;text-align:right;font-size:10pt;font-weight:600;">+${inf.positive_count}</td>
+        <td style="padding:5px 8px;border:1px solid #e5e7eb;color:#dc2626;text-align:right;font-size:10pt;font-weight:600;">-${inf.negative_count}</td>
+        <td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:9pt;word-break:break-all;">${inf.posts?.map((p: any) => p.url ? `<a href="${p.url}" style="color:#2563eb;text-decoration:none;">${p.title || p.url}</a>` : "").filter(Boolean).slice(0,2).join("<br>") || "—"}</td>
       </tr>`).join("");
 
     const section = (title: string, color: string, list: any[]) => list.length === 0 ? "" : `
-      <h3 style="margin:24px 0 8px;color:${color};">${title} (${list.length})</h3>
-      <table style="width:100%;border-collapse:collapse;font-size:12px;">
-        <thead><tr style="background:#f8f9fa;">
-          <th style="padding:6px 10px;text-align:left;">#</th>
-          <th style="padding:6px 10px;text-align:left;">Name / Handle</th>
-          <th style="padding:6px 10px;text-align:left;">Type</th>
-          <th style="padding:6px 10px;text-align:right;">Mentions</th>
-          <th style="padding:6px 10px;text-align:right;">Pro</th>
-          <th style="padding:6px 10px;text-align:right;">Anti</th>
-          <th style="padding:6px 10px;text-align:left;">Source Links</th>
-        </tr></thead>
-        <tbody>${rows(list)}</tbody>
-      </table>`;
+      <div style="margin-top:20px;">
+        <h3 style="margin:0 0 8px;color:${color};font-size:13pt;border-left:4px solid ${color};padding-left:8px;">${title} (${list.length})</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:10pt;">
+          <thead>
+            <tr style="background:#1e40af;color:#fff;">
+              <th style="padding:6px 8px;text-align:left;font-size:9pt;width:4%;">#</th>
+              <th style="padding:6px 8px;text-align:left;font-size:9pt;width:22%;">Name / Handle</th>
+              <th style="padding:6px 8px;text-align:left;font-size:9pt;width:12%;">Type</th>
+              <th style="padding:6px 8px;text-align:right;font-size:9pt;width:12%;">Mentions</th>
+              <th style="padding:6px 8px;text-align:right;font-size:9pt;width:8%;">Pro</th>
+              <th style="padding:6px 8px;text-align:right;font-size:9pt;width:8%;">Anti</th>
+              <th style="padding:6px 8px;text-align:left;font-size:9pt;">Source Links</th>
+            </tr>
+          </thead>
+          <tbody>${rows(list)}</tbody>
+        </table>
+      </div>`;
 
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-      <title>Influencer Intelligence Report — ${clientName}</title>
-      <style>body{font-family:Arial,sans-serif;margin:40px;color:#111;}h1{color:#1e40af;}h2{color:#374151;border-bottom:2px solid #e5e7eb;padding-bottom:8px;}a{color:#2563eb;}</style>
-    </head><body>
-      <h1>⭐ Influencer Intelligence Report</h1>
-      <p><strong>Account:</strong> ${clientName} &nbsp;|&nbsp; <strong>Period:</strong> Last ${days} days &nbsp;|&nbsp; <strong>Generated:</strong> ${date}</p>
-      <p><strong>Viral threshold:</strong> ${viralThreshold}+ interactions required &nbsp;|&nbsp; <strong>Anonymous/fake accounts excluded</strong></p>
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Influencer Intelligence Report — ${clientName}</title>
+<style>
+  @page { size: A4; margin: 15mm 12mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #111; margin: 0; padding: 0; }
+  h1 { font-size: 18pt; color: #1e40af; margin: 0 0 4px; }
+  h2 { font-size: 13pt; color: #374151; border-bottom: 2px solid #e5e7eb; padding-bottom: 6px; margin: 20px 0 10px; }
+  a { color: #2563eb; text-decoration: none; }
+  table { border-collapse: collapse; }
+  .header-bar { background: #1e40af; color: #fff; padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; }
+  .header-bar h1 { color: #fff; }
+  .header-bar p { margin: 2px 0; font-size: 10pt; opacity: 0.9; }
+  .kpi-grid { display: table; width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+  .kpi-cell { display: table-cell; border: 1px solid #e5e7eb; border-radius: 4px; padding: 10px 14px; text-align: center; width: 20%; }
+  .kpi-label { font-size: 9pt; color: #6b7280; margin-bottom: 2px; }
+  .kpi-value { font-size: 20pt; font-weight: 700; }
+  .page-break { page-break-before: always; }
+  .footer { margin-top: 24px; font-size: 9pt; color: #9ca3af; text-align: center; border-top: 1px solid #e5e7eb; padding-top: 8px; }
+</style>
+</head>
+<body>
 
-      <h2>Summary</h2>
-      <table style="border-collapse:collapse;font-size:13px;">
-        <tr><td style="padding:4px 16px 4px 0;">Total Voices</td><td><strong>${allInfluencers.length}</strong></td></tr>
-        <tr><td style="padding:4px 16px 4px 0;">Pro Voices</td><td><strong style="color:#16a34a;">${proCount}</strong></td></tr>
-        <tr><td style="padding:4px 16px 4px 0;">Anti Voices</td><td><strong style="color:#dc2626;">${antiCount}</strong></td></tr>
-        <tr><td style="padding:4px 16px 4px 0;">Media Outlets</td><td><strong>${pressCount}</strong></td></tr>
-        <tr><td style="padding:4px 16px 4px 0;">Social Influencers</td><td><strong>${socialCount}</strong></td></tr>
-      </table>
+<div class="header-bar">
+  <h1>Influencer Intelligence Report</h1>
+  <p><strong>Account:</strong> ${clientName} &nbsp;&nbsp; <strong>Period:</strong> Last ${days} days &nbsp;&nbsp; <strong>Generated:</strong> ${date}</p>
+  <p>Viral threshold: ${viralThreshold}+ interactions &nbsp;|&nbsp; Anonymous accounts excluded &nbsp;|&nbsp; Powered by ORM CMS</p>
+</div>
 
-      ${section("Pro Voices", "#16a34a", pros)}
-      ${section("Anti Voices", "#dc2626", antis)}
-      ${section("Mixed / Neutral", "#6b7280", mixed)}
+<h2>Executive Summary</h2>
+<table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+  <tr>
+    <td style="border:1px solid #e5e7eb;padding:10px 14px;text-align:center;width:20%;">
+      <div style="font-size:9pt;color:#6b7280;">Total Voices</div>
+      <div style="font-size:22pt;font-weight:700;">${allInfluencers.length}</div>
+    </td>
+    <td style="border:1px solid #e5e7eb;padding:10px 14px;text-align:center;width:20%;">
+      <div style="font-size:9pt;color:#6b7280;">Pro Voices</div>
+      <div style="font-size:22pt;font-weight:700;color:#16a34a;">${proCount}</div>
+    </td>
+    <td style="border:1px solid #e5e7eb;padding:10px 14px;text-align:center;width:20%;">
+      <div style="font-size:9pt;color:#6b7280;">Anti Voices</div>
+      <div style="font-size:22pt;font-weight:700;color:#dc2626;">${antiCount}</div>
+    </td>
+    <td style="border:1px solid #e5e7eb;padding:10px 14px;text-align:center;width:20%;">
+      <div style="font-size:9pt;color:#6b7280;">Media Outlets</div>
+      <div style="font-size:22pt;font-weight:700;color:#2563eb;">${pressCount}</div>
+    </td>
+    <td style="border:1px solid #e5e7eb;padding:10px 14px;text-align:center;width:20%;">
+      <div style="font-size:9pt;color:#6b7280;">Social Influencers</div>
+      <div style="font-size:22pt;font-weight:700;color:#7c3aed;">${socialCount}</div>
+    </td>
+  </tr>
+</table>
 
-      <p style="margin-top:40px;font-size:11px;color:#9ca3af;">Generated by ORM CMS · ${date}</p>
-    </body></html>`;
+${pros.length > 0 ? `<h2>Pro Voices (${pros.length})</h2>${section("", "#16a34a", pros).replace(/<div[^>]*>|<\/div>/g, "")}` : ""}
+${antis.length > 0 ? `<div class="page-break"></div><h2>Anti Voices (${antis.length})</h2>${section("", "#dc2626", antis).replace(/<div[^>]*>|<\/div>/g, "")}` : ""}
+${mixed.length > 0 ? `<h2>Mixed / Neutral (${mixed.length})</h2>${section("", "#6b7280", mixed).replace(/<div[^>]*>|<\/div>/g, "")}` : ""}
 
-    const blob = new Blob([html], { type: "text/html" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href = url; a.download = `influencer-report-${clientName}-${days}d.html`;
-    a.click(); URL.revokeObjectURL(url);
+<div class="footer">Generated by ORM CMS &nbsp;&middot;&nbsp; ${date} &nbsp;&middot;&nbsp; Confidential</div>
+</body>
+</html>`;
+
+    const filename = `Influencer-Report-${clientName}-${days}d.pdf`;
+    try {
+      const res = await api.post(
+        "/analytics/html-to-pdf",
+        { html, filename },
+        { responseType: "blob" },
+      );
+      const url = URL.createObjectURL(res.data as Blob);
+      const a   = document.createElement("a");
+      a.href     = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      // Fallback: open in new tab for manual print-to-PDF
+      const w = window.open("", "_blank");
+      if (w) { w.document.write(html); w.document.close(); }
+    }
   }
 
   return (
