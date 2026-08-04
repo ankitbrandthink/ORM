@@ -254,6 +254,22 @@ async def _run_sync(job_id: str, profile, api_key: str | None,
                                                   np.metrics.get("comments", 0))
             metrics_stored = {**np.metrics, "real_comment_total": real_comment_count}
 
+            # Build a reliable permalink from url or construct from platform+external_id
+            def _make_permalink(platform: str, ext_id: str, url: str) -> str:
+                if url:
+                    return url
+                if platform == "instagram":
+                    return f"https://www.instagram.com/p/{ext_id}/"
+                if platform in ("youtube", "youtube_channel"):
+                    return f"https://www.youtube.com/watch?v={ext_id}"
+                if platform == "twitter":
+                    return f"https://x.com/i/status/{ext_id}"
+                return ""
+
+            post_permalink = _make_permalink(
+                profile.platform, np.external_id or "", np.url or ""
+            )
+
             if not existing:
                 post = Post(
                     id=str(uuid.uuid4()),
@@ -265,6 +281,7 @@ async def _run_sync(job_id: str, profile, api_key: str | None,
                     content=np.content,
                     author=np.author,
                     url=np.url,
+                    permalink=post_permalink,
                     published_at=np.published_at,
                     metrics=metrics_stored,
                 )
@@ -285,6 +302,9 @@ async def _run_sync(job_id: str, profile, api_key: str | None,
                 post = existing
                 # Update real count even on existing posts
                 post.metrics = {**(post.metrics or {}), **np.metrics, "real_comment_total": real_comment_count}
+                # Backfill permalink for older posts that were stored without it
+                if not post.permalink and post_permalink:
+                    post.permalink = post_permalink
 
             # ---- fetch real comments or generate representative ----------
             raw_comments = []

@@ -43,6 +43,7 @@ export default function PressPage() {
   const [offset, setOffset]     = useState(0);
   const [loading, setLoading]   = useState(false);
   const [ingesting, setIngesting] = useState(false);
+  const [ingestMsg, setIngestMsg] = useState("");
   const [editing, setEditing]   = useState<any>(null);
   const [isNew, setIsNew]       = useState(false);
   const [error, setError]       = useState("");
@@ -113,8 +114,14 @@ export default function PressPage() {
 
   async function ingestAll() {
     setIngesting(true);
-    try { await api.post("/press-sources/ingest-all"); loadFeed(0); }
-    catch (e: any) { alert(e?.response?.data?.detail || "Ingestion failed"); }
+    setIngestMsg("");
+    try {
+      const r = await api.post("/press-sources/ingest-all");
+      setIngestMsg(r.data?.message || "Ingestion started — refresh in a few minutes.");
+      setTimeout(() => setIngestMsg(""), 8000);
+      loadFeed(0);
+    }
+    catch (e: any) { setIngestMsg(e?.response?.data?.detail || "Ingestion failed — check sources."); }
     finally { setIngesting(false); }
   }
 
@@ -208,6 +215,13 @@ export default function PressPage() {
         )}
       </div>
 
+      {/* Ingestion status banner */}
+      {ingestMsg && (
+        <div className="rounded-xl border border-accent/20 bg-accent/5 px-4 py-2 text-sm text-accent">
+          {ingestMsg}
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="flex gap-1 border-b border-border">
         {(["feed", "sources"] as const).map((tab) => (
@@ -218,7 +232,7 @@ export default function PressPage() {
             )}>
             {tab === "feed"
               ? `News Feed (${total.toLocaleString()})`
-              : `Sources (${sources.length})`}
+              : `All Sources (${sources.length})`}
           </button>
         ))}
       </div>
@@ -226,15 +240,19 @@ export default function PressPage() {
       {/* Feed tab */}
       {activeTab === "feed" && (
         <div className="space-y-3">
-          {/* Search result count */}
-          {activeSearch && (
-            <p className="text-xs text-muted">
-              {total.toLocaleString()} article{total !== 1 ? "s" : ""} matching{" "}
-              <span className="font-medium text-accent">
-                "{parseKeywords(activeSearch).join('", "')}"
-              </span>
-            </p>
-          )}
+          {/* Article count — always visible */}
+          <p className="text-xs text-muted">
+            {activeSearch ? (
+              <>
+                {total.toLocaleString()} article{total !== 1 ? "s" : ""} matching{" "}
+                <span className="font-medium text-accent">
+                  &ldquo;{parseKeywords(activeSearch).join('", "')}&rdquo;
+                </span>
+              </>
+            ) : (
+              <>{total.toLocaleString()} article{total !== 1 ? "s" : ""} in the feed</>
+            )}
+          </p>
 
           {loading && (
             <div className="flex items-center justify-center gap-2 py-12 text-muted">
@@ -339,6 +357,11 @@ export default function PressPage() {
       {/* Sources tab */}
       {activeTab === "sources" && (
         <div className="space-y-3">
+          {sources.length > 0 && (
+            <p className="text-xs text-muted">
+              Sources are shared across all accounts — {sources.length} active source{sources.length !== 1 ? "s" : ""} track media coverage for all clients. Articles are matched to specific accounts by keyword.
+            </p>
+          )}
           {sources.length === 0 && (
             <Card className="py-10 text-center text-muted">
               <Rss className="mx-auto mb-2 h-8 w-8 opacity-30" />
