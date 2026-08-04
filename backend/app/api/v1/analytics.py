@@ -954,6 +954,7 @@ def get_influencers(
         .outerjoin(CommentAnalysis, CommentAnalysis.comment_id == Comment.id)
         .filter(*press_base)
         .group_by(Post.author)
+        .having(func.count(Post.id.distinct()) >= 2)   # at least 2 articles
         .order_by(func.count(Post.id.distinct()).desc())
         .limit(limit)
         .all()
@@ -1004,31 +1005,43 @@ def get_influencers(
         })
 
     # ── Social commenters ────────────────────────────────────────────────────
+    # Viral threshold: only real named accounts with 10+ interactions and actual sentiment
+    VIRAL_MIN = 10
+
+    # Anonymous/system-generated ID patterns to exclude
+    _anon_patterns = ["citizen_%", "user_%", "anonymous%", "guest_%", "Unknown%"]
+
     social_base = [
         Comment.tenant_id == tenant_id,
         Comment.is_deleted == False,
         Comment.author.isnot(None),
         Comment.author != "",
+        Post.published_at >= cutoff,          # same time window as press
+        # Exclude all anonymous placeholder IDs
+        *[~Comment.author.like(p) for p in _anon_patterns],
     ]
     if client_id:
         social_base.append(Post.client_id == client_id)
+
+    _pos_sum = func.sum(sql_case((CommentAnalysis.sentiment == "Positive", 1), else_=0))
+    _neg_sum = func.sum(sql_case((CommentAnalysis.sentiment == "Negative", 1), else_=0))
 
     social_agg = (
         db.query(
             Comment.author.label("name"),
             func.count(Comment.id).label("total"),
-            func.sum(
-                sql_case((CommentAnalysis.sentiment == "Positive", 1), else_=0)
-            ).label("pos"),
-            func.sum(
-                sql_case((CommentAnalysis.sentiment == "Negative", 1), else_=0)
-            ).label("neg"),
+            _pos_sum.label("pos"),
+            _neg_sum.label("neg"),
         )
         .join(Post, Post.id == Comment.post_id)
         .outerjoin(CommentAnalysis, CommentAnalysis.comment_id == Comment.id)
         .filter(*social_base)
         .filter(Post.social_profile_id.isnot(None))   # social posts only
         .group_by(Comment.author)
+        .having(
+            func.count(Comment.id) >= VIRAL_MIN,         # viral threshold
+            (_pos_sum + _neg_sum) > 0,                   # must have real sentiment signal
+        )
         .order_by(func.count(Comment.id).desc())
         .limit(limit)
         .all()
@@ -1054,6 +1067,7 @@ def get_influencers(
     return {
         "client_id": client_id,
         "days": days,
+        "viral_threshold": VIRAL_MIN,
         "press": press_influencers,
         "social": social_influencers,
     }
