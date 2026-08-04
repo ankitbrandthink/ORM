@@ -161,11 +161,27 @@ def _geolocate(ip: str) -> dict:
 
 
 def _create_session(db: Session, user: User, request: Request) -> UserSession:
-    """Create and persist a UserSession record."""
+    """Create and persist a UserSession record, deactivating stale sessions from same device."""
     ip = _get_ip(request)
     ua_str = request.headers.get("User-Agent", "")
     ua_info = _parse_user_agent(ua_str)
     geo = _geolocate(ip)
+
+    # Deactivate any existing active sessions for this user from the same IP/device
+    # to prevent session accumulation from repeated logins on the same device.
+    now = datetime.now(timezone.utc)
+    stale = (
+        db.query(UserSession)
+        .filter(
+            UserSession.user_id == user.id,
+            UserSession.ip_address == ip,
+            UserSession.is_active == True,
+        )
+        .all()
+    )
+    for s in stale:
+        s.is_active = False
+        s.logged_out_at = now
 
     session = UserSession(
         user_id=user.id,
@@ -182,8 +198,8 @@ def _create_session(db: Session, user: User, request: Request) -> UserSession:
         latitude=geo.get("latitude"),
         longitude=geo.get("longitude"),
         is_active=True,
-        logged_in_at=datetime.now(timezone.utc),
-        last_active_at=datetime.now(timezone.utc),
+        logged_in_at=now,
+        last_active_at=now,
     )
     db.add(session)
     db.commit()

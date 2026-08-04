@@ -421,121 +421,268 @@ export default function InfluencersPage() {
 
   async function downloadReport() {
     const date = new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
-    const pros  = allInfluencers.filter((i) => i.stance === "Pro");
-    const antis = allInfluencers.filter((i) => i.stance === "Anti");
-    const mixed = allInfluencers.filter((i) => i.stance === "Mixed");
 
-    const rows = (list: any[]) => list.map((inf, idx) => `
-      <tr style="background:${idx % 2 === 0 ? "#fff" : "#f9fafb"};">
-        <td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:10pt;">#${idx + 1}</td>
-        <td style="padding:5px 8px;border:1px solid #e5e7eb;font-weight:600;font-size:10pt;">${inf.name}</td>
-        <td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:10pt;">${inf.type === "press" ? "Media Outlet" : "Social"}</td>
-        <td style="padding:5px 8px;border:1px solid #e5e7eb;text-align:right;font-size:10pt;">${inf.total_mentions.toLocaleString()}</td>
-        <td style="padding:5px 8px;border:1px solid #e5e7eb;color:#16a34a;text-align:right;font-size:10pt;font-weight:600;">+${inf.positive_count}</td>
-        <td style="padding:5px 8px;border:1px solid #e5e7eb;color:#dc2626;text-align:right;font-size:10pt;font-weight:600;">-${inf.negative_count}</td>
-        <td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:9pt;word-break:break-all;">${inf.posts?.map((p: any) => p.url ? `<a href="${p.url}" style="color:#2563eb;text-decoration:none;">${p.title || p.url}</a>` : "").filter(Boolean).slice(0,2).join("<br>") || "—"}</td>
-      </tr>`).join("");
+    // ── Build COMPLETE, UNFILTERED data for the report (bypass UI stance/type filters) ──
+    const pressData: any[] = (data?.press || []).map((i: any) => ({
+      ...i, type: "press", platform: "press", displayName: i.name,
+    }));
+    const socialData: any[] = (data?.social || []).map((i: any) => ({
+      ...i, type: "social", platform: "mention", displayName: i.name,
+    }));
+    const discoveredData: any[] = discovered.map((d: any) => ({
+      type: "social", platform: d.platform || "twitter",
+      handle: d.handle, displayName: `@${d.handle}`, name: d.handle,
+      profile_url: d.profile_url, keyword: d.keyword,
+      stance: d.stance, total_mentions: d.total_posts,
+      positive_count: d.positive_count, negative_count: d.negative_count,
+      posts: (d.posts || []).map((p: any) => ({
+        url: p.url,
+        published_at: p.published_at ? new Date(p.published_at).toLocaleDateString("en-IN") : "",
+      })),
+    }));
 
-    const section = (title: string, color: string, list: any[]) => list.length === 0 ? "" : `
-      <div style="margin-top:20px;">
-        <h3 style="margin:0 0 8px;color:${color};font-size:13pt;border-left:4px solid ${color};padding-left:8px;">${title} (${list.length})</h3>
-        <table style="width:100%;border-collapse:collapse;font-size:10pt;">
-          <thead>
-            <tr style="background:#1e40af;color:#fff;">
-              <th style="padding:6px 8px;text-align:left;font-size:9pt;width:4%;">#</th>
-              <th style="padding:6px 8px;text-align:left;font-size:9pt;width:22%;">Name / Handle</th>
-              <th style="padding:6px 8px;text-align:left;font-size:9pt;width:12%;">Type</th>
-              <th style="padding:6px 8px;text-align:right;font-size:9pt;width:12%;">Mentions</th>
-              <th style="padding:6px 8px;text-align:right;font-size:9pt;width:8%;">Pro</th>
-              <th style="padding:6px 8px;text-align:right;font-size:9pt;width:8%;">Anti</th>
-              <th style="padding:6px 8px;text-align:left;font-size:9pt;">Source Links</th>
-            </tr>
-          </thead>
-          <tbody>${rows(list)}</tbody>
-        </table>
-      </div>`;
+    const reportAll = [...pressData, ...socialData, ...discoveredData]
+      .sort((a, b) => (b.total_mentions || 0) - (a.total_mentions || 0));
+
+    const pros  = reportAll.filter(i => i.stance === "Pro");
+    const antis = reportAll.filter(i => i.stance === "Anti");
+    const mixed = reportAll.filter(i => i.stance === "Mixed");
+
+    const totalVoices    = reportAll.length;
+    const rProCount      = pros.length;
+    const rAntiCount     = antis.length;
+    const rMixedCount    = mixed.length;
+    const rPressCount    = pressData.length;
+    const rSocialCount   = socialData.length + discoveredData.length;
+    const proPercent     = totalVoices > 0 ? Math.round((rProCount  / totalVoices) * 100) : 0;
+    const antiPercent    = totalVoices > 0 ? Math.round((rAntiCount / totalVoices) * 100) : 0;
+    const mixedPercent   = Math.max(0, 100 - proPercent - antiPercent);
+    const repScore       = totalVoices > 0
+      ? Math.round(((rProCount + rMixedCount * 0.5) / totalVoices) * 100) : 50;
+
+    // Platform distribution
+    const platCounts: Record<string, number> = {};
+    for (const inf of discoveredData) { const p = inf.platform || "twitter"; platCounts[p] = (platCounts[p] || 0) + 1; }
+    if (rPressCount   > 0) platCounts["press"]          = rPressCount;
+    if (socialData.length > 0) platCounts["mention"]    = socialData.length;
+
+    const keywords = discoverKeywords.length > 0 ? discoverKeywords.join(", ") : clientName;
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    function esc(s: string) {
+      return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    }
+    function cleanUrl(url: string) {
+      try { const u = new URL(url); const p = u.hostname + u.pathname; return p.length > 52 ? p.slice(0,52)+"…" : p; }
+      catch { return (url||"").slice(0,52); }
+    }
+    function platLabel(p: string) {
+      return ({hackernews:"HackerNews",mastodon:"Mastodon",twitter:"Twitter/X",press:"Press/Media",mention:"Social"})[p] || p;
+    }
+    function platStyle(p: string) {
+      return ({hackernews:"background:#fff7ed;color:#c2410c;",mastodon:"background:#f5f3ff;color:#7c3aed;",
+        twitter:"background:#e0f2fe;color:#0369a1;",press:"background:#eff6ff;color:#1e40af;",
+        mention:"background:#f3f4f6;color:#374151;"})[p] || "background:#f3f4f6;color:#374151;";
+    }
+
+    function makeRows(list: any[]) {
+      return list.map((inf, idx) => {
+        const sColor = inf.stance==="Pro"?"#16a34a":inf.stance==="Anti"?"#dc2626":"#6b7280";
+        const sBg    = inf.stance==="Pro"?"#dcfce7":inf.stance==="Anti"?"#fee2e2":"#f3f4f6";
+        const nameCell = inf.profile_url
+          ? `<a href="${inf.profile_url}" style="color:#1e40af;font-weight:600;">${esc(inf.displayName||inf.name)}</a>`
+          : `<strong>${esc(inf.displayName||inf.name)}</strong>`;
+        const postLinks = (inf.posts||[]).slice(0,2).filter((p:any)=>p.url)
+          .map((p:any)=>`<div style="margin:1px 0;"><a href="${p.url}" style="color:#1e40af;font-size:7.5pt;">${esc(cleanUrl(p.url))}</a>${p.published_at?` <span style="color:#9ca3af;font-size:7pt;">${p.published_at}</span>`:""}</div>`)
+          .join("") || (inf.profile_url?`<a href="${inf.profile_url}" style="color:#1e40af;font-size:7.5pt;">View Profile →</a>`:"—");
+        return `<tr>
+          <td style="color:#9ca3af;font-size:8pt;text-align:center;">${idx+1}</td>
+          <td style="font-size:9.5pt;">${nameCell}</td>
+          <td><span style="display:inline-block;padding:2px 6px;border-radius:10px;font-size:7.5pt;font-weight:700;${platStyle(inf.platform)}">${platLabel(inf.platform)}</span></td>
+          <td><span style="display:inline-block;padding:2px 6px;border-radius:10px;font-size:8pt;font-weight:700;background:${sBg};color:${sColor};">${inf.stance}</span></td>
+          <td style="text-align:right;font-size:9.5pt;">${(inf.total_mentions||0).toLocaleString()}</td>
+          <td style="text-align:right;font-size:9.5pt;color:#16a34a;font-weight:600;">+${inf.positive_count||0}</td>
+          <td style="text-align:right;font-size:9.5pt;color:#dc2626;font-weight:600;">-${inf.negative_count||0}</td>
+          <td style="font-size:8.5pt;">${postLinks}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    const tableHead = `<thead><tr style="background:#1e40af;color:#fff;">
+      <th style="padding:6px 8px;width:3%;text-align:center;">#</th>
+      <th style="padding:6px 8px;width:20%;">Name / Handle</th>
+      <th style="padding:6px 8px;width:11%;">Platform</th>
+      <th style="padding:6px 8px;width:9%;">Stance</th>
+      <th style="padding:6px 8px;width:7%;text-align:right;">Posts</th>
+      <th style="padding:6px 8px;width:5%;text-align:right;">Pro</th>
+      <th style="padding:6px 8px;width:5%;text-align:right;">Anti</th>
+      <th style="padding:6px 8px;">Profile &amp; Post Links</th>
+    </tr></thead>`;
+
+    const platRows = Object.entries(platCounts).map(([k,v])=>{
+      const pct = Math.round((v/Math.max(1,totalVoices))*100);
+      return `<tr><td style="font-size:9pt;">${platLabel(k)}</td><td style="text-align:center;font-weight:600;">${v}</td>
+      <td style="width:40%;padding:5px 8px;"><div style="background:#e5e7eb;border-radius:3px;overflow:hidden;height:10px;">
+        <div style="background:#1e40af;width:${pct}%;height:100%;"></div></div></td>
+      <td style="text-align:right;font-size:8.5pt;color:#6b7280;">${pct}%</td></tr>`;
+    }).join("");
+
+    const topProNames  = pros.slice(0,5).map(i=>esc(i.displayName||i.name)).join(", ") || "None identified";
+    const topAntiNames = antis.slice(0,5).map(i=>esc(i.displayName||i.name)).join(", ") || "None identified";
 
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Influencer Intelligence Report — ${clientName}</title>
+<title>Influencer Intelligence Report — ${esc(clientName)}</title>
 <style>
-  @page { size: A4; margin: 15mm 12mm; }
-  * { box-sizing: border-box; }
-  body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #111; margin: 0; padding: 0; }
-  h1 { font-size: 18pt; color: #1e40af; margin: 0 0 4px; }
-  h2 { font-size: 13pt; color: #374151; border-bottom: 2px solid #e5e7eb; padding-bottom: 6px; margin: 20px 0 10px; }
-  a { color: #2563eb; text-decoration: none; }
-  table { border-collapse: collapse; }
-  .header-bar { background: #1e40af; color: #fff; padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; }
-  .header-bar h1 { color: #fff; }
-  .header-bar p { margin: 2px 0; font-size: 10pt; opacity: 0.9; }
-  .kpi-grid { display: table; width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-  .kpi-cell { display: table-cell; border: 1px solid #e5e7eb; border-radius: 4px; padding: 10px 14px; text-align: center; width: 20%; }
-  .kpi-label { font-size: 9pt; color: #6b7280; margin-bottom: 2px; }
-  .kpi-value { font-size: 20pt; font-weight: 700; }
-  .page-break { page-break-before: always; }
-  .footer { margin-top: 24px; font-size: 9pt; color: #9ca3af; text-align: center; border-top: 1px solid #e5e7eb; padding-top: 8px; }
+@page { size: A4; margin: 14mm 11mm; }
+* { box-sizing: border-box; }
+body { font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; color: #111; margin: 0; padding: 0; }
+h2 { color: #1e40af; font-size: 13pt; border-left: 4px solid #1e40af; padding: 3px 0 3px 10px; margin: 20px 0 9px; }
+h3 { color: #374151; font-size: 10.5pt; margin: 12px 0 5px; font-weight: 600; }
+table { width: 100%; border-collapse: collapse; }
+th { background: #1e40af; color: white; padding: 6px 8px; text-align: left; font-size: 8.5pt; }
+td { padding: 5px 7px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+tr:nth-child(even) td { background: #f9fafb; }
+a { color: #1e40af; text-decoration: none; }
+.hdr { background: #1e40af; color: white; padding: 13px 17px; margin-bottom: 16px; border-radius: 4px; }
+.hdr h1 { color: white; font-size: 19pt; margin: 0 0 5px; }
+.hdr p { color: rgba(255,255,255,.88); font-size: 9pt; margin: 2px 0; }
+.kpi td { border: 1px solid #e5e7eb !important; background: white !important; padding: 10px 8px; text-align: center; }
+.kpi-label { font-size: 8pt; color: #6b7280; margin-bottom: 2px; }
+.kpi-val { font-size: 24pt; font-weight: 800; line-height: 1.1; }
+.page-break { page-break-before: always; padding-top: 2px; }
+.note { font-size: 8.5pt; color: #6b7280; margin: 0 0 10px; }
+.score-box { display: inline-block; border: 1.5px solid #e5e7eb; border-radius: 6px; padding: 9px 16px; margin: 0 8px 8px 0; text-align: center; }
+.rec { border-left: 3px solid #1e40af; padding: 7px 12px; margin: 7px 0; background: #f8faff; border-radius: 0 4px 4px 0; font-size: 9.5pt; }
+.rec.warn { border-left-color: #dc2626; background: #fff8f8; }
+.rec.good { border-left-color: #16a34a; background: #f0fdf4; }
+.footer { margin-top: 22px; padding-top: 8px; border-top: 1px solid #e5e7eb; font-size: 8pt; color: #9ca3af; text-align: center; }
+.sbar { height: 18px; border-radius: 3px; overflow: hidden; display: flex; margin: 6px 0 3px; }
 </style>
 </head>
 <body>
 
-<div class="header-bar">
+<div class="hdr">
   <h1>Influencer Intelligence Report</h1>
-  <p><strong>Account:</strong> ${clientName} &nbsp;&nbsp; <strong>Period:</strong> Last ${days} days &nbsp;&nbsp; <strong>Generated:</strong> ${date}</p>
-  <p>Viral threshold: ${viralThreshold}+ interactions &nbsp;|&nbsp; Anonymous accounts excluded &nbsp;|&nbsp; Powered by ORM CMS</p>
+  <p><strong>Account:</strong> ${esc(clientName)} &nbsp;&nbsp; <strong>Period:</strong> Last ${days} days &nbsp;&nbsp; <strong>Generated:</strong> ${date}</p>
+  <p>Keywords: ${esc(keywords)} &nbsp;|&nbsp; Viral threshold: ${viralThreshold}+ interactions &nbsp;|&nbsp; Powered by ORM CMS</p>
 </div>
 
 <h2>Executive Summary</h2>
-<table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+<table class="kpi" style="margin-bottom:14px;">
   <tr>
-    <td style="border:1px solid #e5e7eb;padding:10px 14px;text-align:center;width:20%;">
-      <div style="font-size:9pt;color:#6b7280;">Total Voices</div>
-      <div style="font-size:22pt;font-weight:700;">${allInfluencers.length}</div>
-    </td>
-    <td style="border:1px solid #e5e7eb;padding:10px 14px;text-align:center;width:20%;">
-      <div style="font-size:9pt;color:#6b7280;">Pro Voices</div>
-      <div style="font-size:22pt;font-weight:700;color:#16a34a;">${proCount}</div>
-    </td>
-    <td style="border:1px solid #e5e7eb;padding:10px 14px;text-align:center;width:20%;">
-      <div style="font-size:9pt;color:#6b7280;">Anti Voices</div>
-      <div style="font-size:22pt;font-weight:700;color:#dc2626;">${antiCount}</div>
-    </td>
-    <td style="border:1px solid #e5e7eb;padding:10px 14px;text-align:center;width:20%;">
-      <div style="font-size:9pt;color:#6b7280;">Media Outlets</div>
-      <div style="font-size:22pt;font-weight:700;color:#2563eb;">${pressCount}</div>
-    </td>
-    <td style="border:1px solid #e5e7eb;padding:10px 14px;text-align:center;width:20%;">
-      <div style="font-size:9pt;color:#6b7280;">Social Influencers</div>
-      <div style="font-size:22pt;font-weight:700;color:#7c3aed;">${socialCount}</div>
-    </td>
+    <td><div class="kpi-label">Total Voices</div><div class="kpi-val">${totalVoices}</div></td>
+    <td><div class="kpi-label">Pro Voices</div><div class="kpi-val" style="color:#16a34a">${rProCount}</div></td>
+    <td><div class="kpi-label">Anti Voices</div><div class="kpi-val" style="color:#dc2626">${rAntiCount}</div></td>
+    <td><div class="kpi-label">Mixed / Neutral</div><div class="kpi-val" style="color:#6b7280">${rMixedCount}</div></td>
+    <td><div class="kpi-label">Media Outlets</div><div class="kpi-val" style="color:#2563eb">${rPressCount}</div></td>
+    <td><div class="kpi-label">Social Accounts</div><div class="kpi-val" style="color:#7c3aed">${rSocialCount}</div></td>
   </tr>
 </table>
 
-${pros.length > 0 ? `<h2>Pro Voices (${pros.length})</h2>${section("", "#16a34a", pros).replace(/<div[^>]*>|<\/div>/g, "")}` : ""}
-${antis.length > 0 ? `<div class="page-break"></div><h2>Anti Voices (${antis.length})</h2>${section("", "#dc2626", antis).replace(/<div[^>]*>|<\/div>/g, "")}` : ""}
-${mixed.length > 0 ? `<h2>Mixed / Neutral (${mixed.length})</h2>${section("", "#6b7280", mixed).replace(/<div[^>]*>|<\/div>/g, "")}` : ""}
+<h3>Sentiment Distribution</h3>
+<div class="sbar">
+  <div style="width:${proPercent}%;background:#16a34a;"></div>
+  <div style="width:${antiPercent}%;background:#dc2626;"></div>
+  <div style="width:${mixedPercent}%;background:#d1d5db;"></div>
+</div>
+<div style="font-size:8.5pt;color:#374151;display:flex;gap:14px;margin-bottom:14px;">
+  <span><span style="color:#16a34a;font-weight:700">■</span> Pro ${proPercent}% (${rProCount})</span>
+  <span><span style="color:#dc2626;font-weight:700">■</span> Anti ${antiPercent}% (${rAntiCount})</span>
+  <span><span style="color:#9ca3af;font-weight:700">■</span> Mixed ${mixedPercent}% (${rMixedCount})</span>
+</div>
 
-<div class="footer">Generated by ORM CMS &nbsp;&middot;&nbsp; ${date} &nbsp;&middot;&nbsp; Confidential</div>
+${platRows ? `<h3>Platform Distribution</h3>
+<table style="width:56%;margin-bottom:14px;">
+  <thead><tr style="background:#1e40af;color:#fff;"><th style="padding:5px 7px;">Platform</th><th style="padding:5px 7px;text-align:center;">Accounts</th><th style="padding:5px 7px;">Share</th><th style="padding:5px 7px;text-align:right;">%</th></tr></thead>
+  <tbody>${platRows}</tbody>
+</table>` : ""}
+
+${pros.length > 0 ? `
+<div class="page-break"></div>
+<h2 style="border-left-color:#16a34a;color:#16a34a">Pro Voices (${rProCount})</h2>
+<p class="note">Accounts publicly supporting or writing positively about <strong>${esc(clientName)}</strong></p>
+<table>${tableHead}<tbody>${makeRows(pros)}</tbody></table>` : ""}
+
+${antis.length > 0 ? `
+<div class="page-break"></div>
+<h2 style="border-left-color:#dc2626;color:#dc2626">Anti Voices (${rAntiCount})</h2>
+<p class="note">Accounts publicly opposing or writing critically about <strong>${esc(clientName)}</strong></p>
+<table>${tableHead}<tbody>${makeRows(antis)}</tbody></table>` : ""}
+
+${mixed.length > 0 ? `
+<h2>Mixed / Neutral Voices (${rMixedCount})</h2>
+<p class="note">Accounts with balanced or neutral coverage of <strong>${esc(clientName)}</strong></p>
+<table>${tableHead}<tbody>${makeRows(mixed)}</tbody></table>` : ""}
+
+<div class="page-break"></div>
+<h2>Reputation &amp; Social Listening Analysis</h2>
+<div style="margin-bottom:14px;">
+  <div class="score-box">
+    <div class="kpi-label">Reputation Score</div>
+    <div class="kpi-val" style="color:${repScore>=60?"#16a34a":repScore>=40?"#f59e0b":"#dc2626"};font-size:26pt;">${repScore}%</div>
+    <div style="font-size:8pt;color:#6b7280;">${repScore>=60?"Positive":repScore>=40?"Moderate":"Needs Action"}</div>
+  </div>
+  <div class="score-box">
+    <div class="kpi-label">Social Accounts Found</div>
+    <div class="kpi-val" style="color:#7c3aed;font-size:26pt;">${discoveredData.length}</div>
+    <div style="font-size:8pt;color:#6b7280;">via Keyword Search</div>
+  </div>
+  <div class="score-box">
+    <div class="kpi-label">Keywords Tracked</div>
+    <div class="kpi-val" style="color:#0369a1;font-size:26pt;">${Math.max(1,discoverKeywords.length)}</div>
+    <div style="font-size:8pt;color:#6b7280;">Search Terms</div>
+  </div>
+</div>
+
+<h3>Top Supporters</h3>
+<p style="font-size:9.5pt;color:#374151;margin:3px 0 12px;">${topProNames}</p>
+<h3>Top Critics</h3>
+<p style="font-size:9.5pt;color:#374151;margin:3px 0 12px;">${topAntiNames}</p>
+
+${discoverKeywords.length > 0 ? `<h3>Monitored Keywords</h3>
+<div style="margin:5px 0 14px;">${discoverKeywords.map(k=>`<span style="display:inline-block;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:2px 9px;border-radius:10px;font-size:8.5pt;margin:2px;">#${esc(k)}</span>`).join(" ")}</div>` : ""}
+
+<h2>Reputation Strategy &amp; Recommendations</h2>
+<p class="note">Based on analysis of <strong>${totalVoices} voices</strong> across last <strong>${days} days</strong> for <strong>${esc(clientName)}</strong></p>
+
+${proPercent>=60
+  ? `<div class="rec good"><strong>✓ Strong Positive Sentiment (${proPercent}% Pro)</strong><br>Reputation is strong. Amplify top pro voices: <em>${pros.slice(0,3).map(i=>esc(i.displayName||i.name)).join(", ")||"N/A"}</em>. Engage proactively and share their content.</div>`
+  : proPercent<35
+  ? `<div class="rec warn"><strong>⚠ Low Pro Sentiment — Action Required (${proPercent}% Pro, ${antiPercent}% Anti)</strong><br>Critical attention needed. Address concerns raised by anti voices. Engage directly with media publishing negative content and issue targeted clarifications.</div>`
+  : `<div class="rec"><strong>◈ Balanced Coverage (${proPercent}% Pro, ${antiPercent}% Anti)</strong><br>Moderate reputation with room for improvement. Focus on converting neutral voices through targeted engagement and positive press outreach.</div>`}
+
+${rAntiCount>0
+  ? `<div class="rec warn"><strong>⚠ Monitor ${rAntiCount} Anti Voice${rAntiCount!==1?"s":""}</strong><br>Key critics to track: <em>${topAntiNames}</em>. Review their specific concerns and prepare targeted PR responses where warranted.</div>`
+  : `<div class="rec good"><strong>✓ No Significant Critics Found</strong><br>No major anti voices identified in this period — a positive signal. Continue monitoring regularly to catch early shifts.</div>`}
+
+${rPressCount>0 ? `<div class="rec good"><strong>✓ ${rPressCount} Media Outlets Covering This Account</strong><br>Significant press presence. Maintain relationships with pro-leaning outlets and monitor neutral ones for sentiment shifts.</div>` : ""}
+
+${discoveredData.length>0 ? `<div class="rec"><strong>◈ ${discoveredData.length} Social Accounts Discovered via Keyword Search</strong><br>Active social conversation on HackerNews, Mastodon, and Twitter/X. Engage with key influencers and respond to viral posts within 24 hours for maximum impact.</div>` : ""}
+
+<div class="rec">
+  <strong>◈ Recommended Next Steps</strong><br>
+  1. Amplify content from top pro voices: ${pros.slice(0,3).map(i=>esc(i.displayName||i.name)).join(", ")||"N/A"}<br>
+  2. Monitor anti voices weekly: ${antis.slice(0,3).map(i=>esc(i.displayName||i.name)).join(", ")||"None"}<br>
+  3. Run keyword discovery weekly for: ${esc(keywords)}<br>
+  4. Track press sentiment from ${rPressCount} media outlets monthly<br>
+  5. Generate this report monthly to measure reputation trend changes
+</div>
+
+<div class="footer">Generated by ORM CMS &nbsp;·&nbsp; ${date} &nbsp;·&nbsp; Confidential &nbsp;·&nbsp; Account: ${esc(clientName)} &nbsp;·&nbsp; Period: Last ${days} days &nbsp;·&nbsp; ${totalVoices} voices analyzed</div>
 </body>
 </html>`;
 
-    const filename = `Influencer-Report-${clientName}-${days}d.pdf`;
+    const filename = `Influencer-Report-${clientName.replace(/\s+/g,"-")}-${days}d.pdf`;
     try {
-      const res = await api.post(
-        "/analytics/html-to-pdf",
-        { html, filename },
-        { responseType: "blob" },
-      );
+      const res = await api.post("/analytics/html-to-pdf", { html, filename }, { responseType: "blob" });
       const url = URL.createObjectURL(res.data as Blob);
-      const a   = document.createElement("a");
-      a.href     = url;
-      a.download = filename;
-      a.click();
+      const a = document.createElement("a");
+      a.href = url; a.download = filename; a.click();
       URL.revokeObjectURL(url);
     } catch {
-      // Fallback: open in new tab for manual print-to-PDF
       const w = window.open("", "_blank");
       if (w) { w.document.write(html); w.document.close(); }
     }
