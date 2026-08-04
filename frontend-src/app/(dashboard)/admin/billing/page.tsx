@@ -177,13 +177,19 @@ export default function BillingPage() {
           </div>
 
           {/* Model info */}
-          <div className="rounded-xl border border-border bg-card/40 px-4 py-3 text-xs text-muted">
-            <span className="font-semibold text-fg">AI Model: </span>{data.model || "claude-3-5-haiku"}
-            {" · "}
-            <span className={data.engine_active ? "text-green-600 font-medium" : "text-red-500 font-medium"}>
-              {data.engine_active ? "Engine active" : "Engine inactive — API key missing"}
+          <div className="rounded-xl border border-border bg-card/40 px-4 py-3 text-xs text-muted flex items-center justify-between gap-4">
+            <span>
+              <span className="font-semibold text-fg">AI Model: </span>{data.model || "claude-3-5-haiku"}
+              {" · "}
+              <span className={data.engine_active ? "text-green-600 font-medium" : "text-red-500 font-medium"}>
+                {data.engine_active ? "Engine active" : "Engine inactive — API key missing"}
+              </span>
+              {" · "}Cost estimate is approximate based on public Claude pricing.
             </span>
-            {" · "}Cost estimate is approximate based on public Claude pricing.
+            <a href="/admin/settings/ai-models"
+              className="shrink-0 text-accent hover:underline font-medium">
+              Switch model →
+            </a>
           </div>
         </>
       )}

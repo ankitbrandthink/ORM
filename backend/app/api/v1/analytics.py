@@ -903,6 +903,162 @@ def press_source_stats(
     return {"stats": stats}
 
 
+@router.get("/influencers")
+def get_influencers(
+    client_id: Optional[str] = Query(None),
+    days: int = Query(90),
+    limit: int = Query(25),
+    current: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Top pro/anti influencers derived from existing press and social data.
+
+    Press influencers = journalists / authors with the most articles about this client.
+    Social engagers  = account handles with the most comments on the client's own posts.
+    Stance is inferred from the CommentAnalysis sentiment attached to each piece of content.
+    """
+    from sqlalchemy import case as sql_case
+    from collections import defaultdict
+
+    tenant_id = current.tenant_id
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    press_kinds = ("press_rss", "youtube_channel_video")
+
+    # ── Press authors ────────────────────────────────────────────────────────
+    press_base = [
+        Post.tenant_id == tenant_id,
+        Post.source_kind.in_(press_kinds),
+        Post.press_source_id.isnot(None),
+        Post.is_deleted == False,
+        Post.author.isnot(None),
+        Post.author != "",
+        Post.published_at >= cutoff,
+    ]
+    if client_id:
+        press_base.append(Post.client_id == client_id)
+
+    # Aggregate author totals + sentiment in one pass through Comment/CommentAnalysis
+    press_agg = (
+        db.query(
+            Post.author.label("name"),
+            func.count(Post.id.distinct()).label("total"),
+            func.sum(
+                sql_case((CommentAnalysis.sentiment == "Positive", 1), else_=0)
+            ).label("pos"),
+            func.sum(
+                sql_case((CommentAnalysis.sentiment == "Negative", 1), else_=0)
+            ).label("neg"),
+        )
+        .outerjoin(Comment, Comment.post_id == Post.id)
+        .outerjoin(CommentAnalysis, CommentAnalysis.comment_id == Comment.id)
+        .filter(*press_base)
+        .group_by(Post.author)
+        .order_by(func.count(Post.id.distinct()).desc())
+        .limit(limit)
+        .all()
+    )
+
+    # Bulk-fetch recent article URLs for all top authors in a single query
+    top_press_names = [r.name for r in press_agg]
+    article_rows: list = []
+    if top_press_names:
+        article_rows = (
+            db.query(Post.author, Post.url, Post.content, Post.published_at, Post.source_kind)
+            .filter(
+                Post.tenant_id == tenant_id,
+                Post.author.in_(top_press_names),
+                Post.source_kind.in_(press_kinds),
+                Post.is_deleted == False,
+            )
+            .order_by(Post.published_at.desc())
+            .limit(limit * 5)
+            .all()
+        )
+    articles_by_author: dict = defaultdict(list)
+    for a in article_rows:
+        if len(articles_by_author[a.author]) < 5:
+            title_raw = (a.content or "").split("\n")[0][:120]
+            articles_by_author[a.author].append({
+                "url": a.url or "",
+                "title": title_raw,
+                "published_at": a.published_at.strftime("%d %b %Y") if a.published_at else None,
+                "kind": a.source_kind,
+            })
+
+    press_influencers = []
+    for r in press_agg:
+        pos = r.pos or 0
+        neg = r.neg or 0
+        stance = "Pro" if pos > neg else "Anti" if neg > pos else "Mixed"
+        press_influencers.append({
+            "name": r.name,
+            "type": "press",
+            "platform": "press",
+            "handle": None,
+            "total_mentions": r.total,
+            "positive_count": pos,
+            "negative_count": neg,
+            "stance": stance,
+            "posts": articles_by_author.get(r.name, []),
+        })
+
+    # ── Social commenters ────────────────────────────────────────────────────
+    social_base = [
+        Comment.tenant_id == tenant_id,
+        Comment.is_deleted == False,
+        Comment.author.isnot(None),
+        Comment.author != "",
+    ]
+    if client_id:
+        social_base.append(Post.client_id == client_id)
+
+    social_agg = (
+        db.query(
+            Comment.author.label("name"),
+            func.count(Comment.id).label("total"),
+            func.sum(
+                sql_case((CommentAnalysis.sentiment == "Positive", 1), else_=0)
+            ).label("pos"),
+            func.sum(
+                sql_case((CommentAnalysis.sentiment == "Negative", 1), else_=0)
+            ).label("neg"),
+        )
+        .join(Post, Post.id == Comment.post_id)
+        .outerjoin(CommentAnalysis, CommentAnalysis.comment_id == Comment.id)
+        .filter(*social_base)
+        .filter(Post.social_profile_id.isnot(None))   # social posts only
+        .group_by(Comment.author)
+        .order_by(func.count(Comment.id).desc())
+        .limit(limit)
+        .all()
+    )
+
+    social_influencers = []
+    for r in social_agg:
+        pos = r.pos or 0
+        neg = r.neg or 0
+        stance = "Pro" if pos > neg else "Anti" if neg > pos else "Mixed"
+        social_influencers.append({
+            "name": r.name,
+            "type": "social",
+            "platform": "social",
+            "handle": r.name,
+            "total_mentions": r.total,
+            "positive_count": pos,
+            "negative_count": neg,
+            "stance": stance,
+            "posts": [],
+        })
+
+    return {
+        "client_id": client_id,
+        "days": days,
+        "press": press_influencers,
+        "social": social_influencers,
+    }
+
+
 @router.get("/press-report-full")
 def press_report_full(
     client_id: Optional[str] = Query(None),

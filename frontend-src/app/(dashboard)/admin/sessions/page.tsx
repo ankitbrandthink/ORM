@@ -63,6 +63,26 @@ export default function SessionsPage() {
     catch (e: any) { alert(e?.response?.data?.detail || "Could not revoke sessions."); }
   }
 
+  async function revokeDuplicates() {
+    if (!confirm("Keep only the MOST RECENT session per user and revoke all others?")) return;
+    // Group by user, keep the latest session per user, revoke the rest
+    const toRevoke: string[] = [];
+    for (const [, group] of Object.entries(byUser)) {
+      const active = (group as any).sessions.filter((s: any) => s.is_active);
+      if (active.length <= 1) continue;
+      const sorted = [...active].sort((a: any, b: any) =>
+        new Date(b.last_active_at || b.logged_in_at).getTime() -
+        new Date(a.last_active_at || a.logged_in_at).getTime()
+      );
+      // Keep sorted[0] (most recent), revoke the rest
+      toRevoke.push(...sorted.slice(1).map((s: any) => s.id));
+    }
+    if (toRevoke.length === 0) { alert("No duplicate sessions found."); return; }
+    await Promise.all(toRevoke.map((id) => api.delete(`/sessions/${id}`).catch(() => {})));
+    load();
+    alert(`Revoked ${toRevoke.length} duplicate session${toRevoke.length !== 1 ? "s" : ""}.`);
+  }
+
   // Group sessions by user
   const byUser: Record<string, { name: string; email: string; sessions: any[] }> = {};
   for (const s of sessions) {
@@ -91,6 +111,10 @@ export default function SessionsPage() {
               onChange={(e) => setActiveOnly(e.target.checked)} />
             Active only
           </label>
+          <Button variant="ghost" onClick={revokeDuplicates}
+            className="text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/20 text-xs">
+            <LogOut className="h-3.5 w-3.5 mr-1" /> Revoke Duplicates
+          </Button>
           <Button variant="ghost" onClick={load} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
             Refresh

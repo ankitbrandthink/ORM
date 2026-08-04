@@ -4,6 +4,7 @@ import Link from "next/link";
 import {
   Building2, Radio, BarChart3, ArrowRight, Smile, Frown, Meh,
   AlertTriangle, RefreshCw, MessageSquare, Clock, Bell, BellOff,
+  Rss, Star,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/primitives";
@@ -166,6 +167,48 @@ export default function HomePage() {
 
   return (
     <div className="space-y-6">
+      {/* ── 3-Section Top Navigation ── */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {[
+          {
+            href: "/listening",
+            icon: Radio,
+            label: "Social Media",
+            desc: "Posts, comments & sentiment from connected social accounts",
+            color: "from-purple-500/10 to-purple-500/5 border-purple-200 dark:border-purple-800/40",
+            iconColor: "text-purple-600",
+          },
+          {
+            href: "/press",
+            icon: Rss,
+            label: "Press & Media",
+            desc: "RSS feeds, YouTube channels and media coverage analysis",
+            color: "from-blue-500/10 to-blue-500/5 border-blue-200 dark:border-blue-800/40",
+            iconColor: "text-blue-600",
+          },
+          {
+            href: "/influencers",
+            icon: Star,
+            label: "Influencers",
+            desc: "Top voices speaking for and against your connected accounts",
+            color: "from-amber-500/10 to-amber-500/5 border-amber-200 dark:border-amber-800/40",
+            iconColor: "text-amber-600",
+          },
+        ].map(({ href, icon: Icon, label, desc, color, iconColor }) => (
+          <Link key={href} href={href}
+            className={`group flex items-start gap-3 rounded-2xl border bg-gradient-to-br ${color} px-4 py-4 transition-all hover:shadow-md hover:-translate-y-0.5`}>
+            <Icon className={`mt-0.5 h-6 w-6 shrink-0 ${iconColor}`} />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold">{label}</span>
+                <ArrowRight className="h-4 w-4 text-muted opacity-0 group-hover:opacity-100 transition-opacity" />
+              </div>
+              <p className="mt-0.5 text-xs text-muted leading-relaxed">{desc}</p>
+            </div>
+          </Link>
+        ))}
+      </div>
+
       {/* ── Header ── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>

@@ -5,7 +5,7 @@ import { useState } from "react";
 import {
   LayoutDashboard, Radio, BarChart3, FileText, Building2, Settings, ChevronLeft,
   Upload, BellRing, CalendarDays, Users, Layers, Rss, MonitorCheck, MessageSquare,
-  CreditCard, FileBarChart2,
+  CreditCard, FileBarChart2, Star, Brain,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -15,6 +15,7 @@ const NAV = [
   { href: "/listening", label: "Posts & Comments", desc: "Add post links & read sentiment", icon: Radio },
   { href: "/analytics", label: "Social Insights", desc: "Narrative briefing & trends", icon: BarChart3 },
   { href: "/press", label: "Press Sources", desc: "RSS feeds & news channels", icon: Rss },
+  { href: "/influencers", label: "Influencer Map", desc: "Pro/anti voices by account", icon: Star },
   { href: "/orm", label: "ORM Queue", desc: "Reply & ticket management", icon: MessageSquare },
   { href: "/reports/daily", label: "Daily Reports", desc: "EOD & sentiment per client", icon: CalendarDays },
   { href: "/reports/eod", label: "EOD Report", desc: "Comment deployment reports — per-client PDF", icon: FileBarChart2 },
@@ -23,7 +24,8 @@ const NAV = [
   { href: "/admin/alerts", label: "WA Alerts", desc: "WhatsApp notifications", icon: BellRing },
   { href: "/admin/contacts", label: "Alert Contacts", desc: "Who gets notified", icon: Users },
   { href: "/admin/settings/social-sync", label: "Social Sync", desc: "Auto-fetch posts & comments", icon: Layers },
-  { href: "/admin/billing", label: "API Usage & Billing", desc: "Claude token consumption & cost", icon: CreditCard },
+  { href: "/admin/settings/ai-models", label: "AI Model Settings", desc: "Connect Claude, Groq, Gemini, GPT", icon: Brain },
+  { href: "/admin/billing", label: "API Usage & Billing", desc: "Token consumption & cost", icon: CreditCard },
   { href: "/admin/sessions", label: "Active Sessions", desc: "Devices & login locations", icon: MonitorCheck },
   { href: "/admin/users", label: "Settings", desc: "Team & access", icon: Settings },
 ];
