@@ -26,6 +26,22 @@ function RedditIcon({ className }: { className?: string }) {
   );
 }
 
+function HackerNewsIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M0 24V0h24v24H0zM6.951 5.896l4.112 7.708v5.064h1.583v-4.972l4.148-7.799h-1.749l-2.457 4.875c-.372.745-.688 1.434-.688 1.434s-.297-.708-.651-1.434L8.831 5.896z"/>
+    </svg>
+  );
+}
+
+function MastodonIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M23.268 5.313c-.35-2.578-2.617-4.61-5.304-5.004C17.51.242 15.792 0 11.813 0h-.03c-3.98 0-4.835.242-5.288.309C3.882.692 1.496 2.518.917 5.127.64 6.412.61 7.837.661 9.143c.074 1.874.088 3.745.26 5.611.118 1.24.325 2.47.62 3.68.55 2.237 2.777 4.098 4.96 4.857 2.336.792 4.849.923 7.256.38.265-.061.527-.132.786-.213.585-.184 1.27-.39 1.774-.753a.057.057 0 0 0 .023-.043v-1.809a.052.052 0 0 0-.02-.041.053.053 0 0 0-.046-.01 20.282 20.282 0 0 1-4.709.545c-2.73 0-3.463-1.284-3.674-1.818a5.593 5.593 0 0 1-.319-1.433.053.053 0 0 1 .066-.054c1.517.363 3.072.546 4.632.546.376 0 .75 0 1.125-.01 1.57-.044 3.224-.124 4.768-.422.038-.008.077-.015.11-.024 2.435-.464 4.753-1.92 4.989-5.604.008-.145.03-1.52.03-1.67.002-.512.167-3.63-.024-5.545zm-3.748 9.195h-2.561V8.29c0-1.309-.55-1.976-1.67-1.976-1.23 0-1.846.79-1.846 2.35v3.403h-2.546V8.663c0-1.56-.617-2.35-1.848-2.35-1.112 0-1.668.668-1.67 1.977v6.218H4.822V8.102c0-1.31.337-2.35 1.011-3.12.696-.77 1.608-1.164 2.74-1.164 1.311 0 2.302.5 2.962 1.498l.638 1.06.638-1.06c.66-.999 1.65-1.498 2.96-1.498 1.13 0 2.043.395 2.74 1.164.675.77 1.012 1.81 1.012 3.12z"/>
+    </svg>
+  );
+}
+
 function InfluencerCard({ inf, idx, onRemove }: { inf: any; idx: number; onRemove?: (id: string) => void }) {
   const Icon = STANCE_ICON[inf.stance] ?? Minus;
   const total = inf.positive_count + inf.negative_count || 1;
@@ -33,18 +49,28 @@ function InfluencerCard({ inf, idx, onRemove }: { inf: any; idx: number; onRemov
   const negP = Math.round((inf.negative_count / total) * 100);
   const isTwitter = inf.source === "twitter";
   const isReddit = inf.source === "reddit";
-  const isDiscovered = isTwitter || isReddit;
+  const isHN = inf.source === "hackernews";
+  const isMastodon = inf.source === "mastodon";
+  const isDiscovered = isTwitter || isReddit || isHN || isMastodon;
 
   const borderColor = isTwitter
     ? "border-l-4 border-l-purple-400"
     : isReddit
     ? "border-l-4 border-l-orange-400"
+    : isHN
+    ? "border-l-4 border-l-amber-500"
+    : isMastodon
+    ? "border-l-4 border-l-violet-400"
     : "";
 
   const avatarClass = isTwitter
     ? "bg-purple-100 dark:bg-purple-900/30 text-purple-600"
     : isReddit
     ? "bg-orange-100 dark:bg-orange-900/30 text-orange-600"
+    : isHN
+    ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700"
+    : isMastodon
+    ? "bg-violet-100 dark:bg-violet-900/30 text-violet-600"
     : "bg-accent/10 text-accent";
 
   return (
@@ -55,6 +81,10 @@ function InfluencerCard({ inf, idx, onRemove }: { inf: any; idx: number; onRemov
             <Twitter className="h-4 w-4" />
           ) : isReddit ? (
             <RedditIcon className="h-4 w-4" />
+          ) : isHN ? (
+            <HackerNewsIcon className="h-4 w-4" />
+          ) : isMastodon ? (
+            <MastodonIcon className="h-4 w-4" />
           ) : (
             `#${idx + 1}`
           )}
@@ -83,6 +113,14 @@ function InfluencerCard({ inf, idx, onRemove }: { inf: any; idx: number; onRemov
             ) : isReddit ? (
               <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300 text-[10px]">
                 <RedditIcon className="h-2.5 w-2.5 mr-1" />Reddit
+              </Badge>
+            ) : isHN ? (
+              <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 text-[10px]">
+                <HackerNewsIcon className="h-2.5 w-2.5 mr-1" />HackerNews
+              </Badge>
+            ) : isMastodon ? (
+              <Badge className="bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300 text-[10px]">
+                <MastodonIcon className="h-2.5 w-2.5 mr-1" />Mastodon
               </Badge>
             ) : (
               <Badge className="bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 text-[10px]">
@@ -135,27 +173,64 @@ function InfluencerCard({ inf, idx, onRemove }: { inf: any; idx: number; onRemov
 function DiscoveredCard({ inf, onRemove }: { inf: any; onRemove: (id: string) => void }) {
   const Icon = STANCE_ICON[inf.stance] ?? Minus;
   const [expanded, setExpanded] = useState(false);
+  const platform = inf.platform || "twitter";
+  const isTwitter = platform === "twitter";
+  const isReddit = platform === "reddit";
+  const isHN = platform === "hackernews";
+  const isMastodon = platform === "mastodon";
+
+  const borderClass = isHN
+    ? "border-l-4 border-l-amber-500"
+    : isMastodon
+    ? "border-l-4 border-l-violet-400"
+    : isReddit
+    ? "border-l-4 border-l-orange-400"
+    : "border-l-4 border-l-purple-400";
+
+  const avatarClass = isHN
+    ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700"
+    : isMastodon
+    ? "bg-violet-100 dark:bg-violet-900/30 text-violet-600"
+    : isReddit
+    ? "bg-orange-100 dark:bg-orange-900/30 text-orange-600"
+    : "bg-purple-100 dark:bg-purple-900/30 text-purple-600";
+
+  const badgeClass = isHN
+    ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 text-[10px]"
+    : isMastodon
+    ? "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300 text-[10px]"
+    : isReddit
+    ? "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300 text-[10px]"
+    : "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 text-[10px]";
+
+  const platformLabel = isHN ? "HackerNews" : isMastodon ? "Mastodon" : isReddit ? "Reddit" : "Twitter/X";
+  const postLabel = isHN ? "posts" : isMastodon ? "toots" : isReddit ? "posts" : "tweets";
+  const handlePrefix = isHN ? "" : isReddit ? "u/" : "@";
+
   return (
-    <Card className="space-y-3 border-l-4 border-l-purple-400">
+    <Card className={cn("space-y-3", borderClass)}>
       <div className="flex items-start gap-3">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-100 dark:bg-purple-900/30 text-xs font-bold text-purple-600">
-          <Twitter className="h-4 w-4" />
+        <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold", avatarClass)}>
+          {isHN ? <HackerNewsIcon className="h-4 w-4" />
+            : isMastodon ? <MastodonIcon className="h-4 w-4" />
+            : isReddit ? <RedditIcon className="h-4 w-4" />
+            : <Twitter className="h-4 w-4" />}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <a href={inf.profile_url} target="_blank" rel="noreferrer"
               className="text-sm font-semibold text-accent hover:underline truncate">
-              @{inf.handle}
+              {handlePrefix}{inf.handle}
             </a>
             <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold flex items-center gap-1", STANCE_COLOR[inf.stance])}>
               <Icon className="h-3 w-3" />{inf.stance}
             </span>
-            <Badge className="bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 text-[10px]">
-              Discovered · Twitter
+            <Badge className={badgeClass}>
+              Discovered · {platformLabel}
             </Badge>
           </div>
           <div className="flex items-center gap-3 mt-1 text-xs text-muted">
-            <span className="font-medium">{inf.total_posts} tweets</span>
+            <span className="font-medium">{inf.total_posts} {postLabel}</span>
             <span className="text-emerald-600 font-medium">+{inf.positive_count} pro</span>
             <span className="text-red-500 font-medium">−{inf.negative_count} anti</span>
             <span className="opacity-60">#{inf.keyword}</span>
@@ -181,7 +256,7 @@ function DiscoveredCard({ inf, onRemove }: { inf: any; onRemove: (id: string) =>
             <button onClick={() => setExpanded(!expanded)}
               className="text-[10px] text-accent flex items-center gap-1 hover:underline">
               {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-              {expanded ? "Show less" : `+${inf.posts.length - 2} more tweets`}
+              {expanded ? "Show less" : `+${inf.posts.length - 2} more ${postLabel}`}
             </button>
           )}
         </>
@@ -552,8 +627,9 @@ ${mixed.length > 0 ? `<h2>Mixed / Neutral (${mixed.length})</h2>${section("", "#
         <Info className="h-4 w-4 mt-0.5 shrink-0" />
         <span>
           <b>What you see here:</b> Media outlets (RSS/press) + social commenters + accounts discovered via keyword search
-          on Twitter/X <span className="text-purple-600 font-medium">(purple border)</span> and Reddit
-          <span className="text-orange-600 font-medium"> (orange border)</span>.
+          on Twitter/X <span className="text-purple-600 font-medium">(purple)</span>,
+          HackerNews <span className="text-amber-600 font-medium">(amber)</span>, and
+          Mastodon <span className="text-violet-600 font-medium">(violet border)</span>.
           Use <b>Discover More Social Influencers</b> below to extract real accounts talking about any keyword.
         </span>
       </div>
@@ -650,7 +726,7 @@ ${mixed.length > 0 ? `<h2>Mixed / Neutral (${mixed.length})</h2>${section("", "#
               <Twitter className="h-5 w-5 text-[#1DA1F2]" /> Discover More Social Influencers
             </h2>
             <p className="text-xs text-muted">
-              Search Twitter/X &amp; Reddit by keyword — AI classifies accounts as Pro or Anti and adds them to the list above.
+              Search Twitter/X, HackerNews &amp; Mastodon by keyword — AI classifies accounts as Pro or Anti and adds them to the list above.
             </p>
           </div>
           <Button variant="ghost" onClick={() => loadDiscovered(clientId, null)} disabled={discoverLoading}>
@@ -706,7 +782,7 @@ ${mixed.length > 0 ? `<h2>Mixed / Neutral (${mixed.length})</h2>${section("", "#
             <p className="text-sm font-medium">No Twitter/X influencers discovered yet</p>
             <p className="mt-1 text-xs max-w-xs mx-auto">
               Enter a keyword (e.g., "{clientName || "BJP"}", "#Congress") and click Discover Now.
-              Found accounts appear above in the influencer grid with a Twitter badge.
+              Found accounts appear above in the influencer grid with platform badges (Twitter, HackerNews, or Mastodon).
             </p>
           </Card>
         )}

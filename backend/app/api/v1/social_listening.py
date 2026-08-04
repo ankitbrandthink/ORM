@@ -54,7 +54,7 @@ async def _run_discovery(tenant_id: str, client_id: str, keyword: str, limit: in
 
             # Determine platform from first post (all tweets for a handle share platform)
             platform = handle_tweets[0].get("platform", "twitter") if handle_tweets else "twitter"
-            if platform not in ("twitter", "reddit"):
+            if platform not in ("twitter", "reddit", "hackernews", "mastodon"):
                 platform = "twitter"
 
             for tw in handle_tweets[:5]:  # cap AI calls per handle
@@ -77,6 +77,10 @@ async def _run_discovery(tenant_id: str, client_id: str, keyword: str, limit: in
             # Build profile URL based on platform
             if platform == "reddit":
                 profile_url = f"https://reddit.com/u/{handle}"
+            elif platform == "hackernews":
+                profile_url = f"https://news.ycombinator.com/user?id={handle}"
+            elif platform == "mastodon":
+                profile_url = f"https://mastodon.social/@{handle}"
             else:
                 profile_url = f"https://x.com/{handle}"
 

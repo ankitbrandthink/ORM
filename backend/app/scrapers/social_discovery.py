@@ -1,7 +1,12 @@
-"""Social Discovery — keyword search via nitter (Twitter/X) + Reddit RSS (no API key needed).
+"""Social Discovery — keyword search via nitter (Twitter/X) + HackerNews + Mastodon.
 
-Searches Twitter/X and Reddit for accounts talking about a keyword, classifies
-their stance as Pro, Anti, or Mixed toward the entity.
+Searches multiple social platforms for accounts discussing a keyword, then
+classifies their stance as Pro, Anti, or Mixed toward the entity.
+
+Data sources (no API keys required, VPS-accessible):
+  • Nitter  — Twitter/X RSS (best effort; instances sometimes down)
+  • HackerNews — Algolia search API (reliable, no auth)
+  • Mastodon — mastodon.social accounts search (no auth needed)
 """
 from __future__ import annotations
 
@@ -34,16 +39,21 @@ _TWITTER_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-_REDDIT_HEADERS = {
-    "User-Agent": "ORM-CMS/1.0 (social discovery bot; contact admin)",
+_HN_HEADERS = {
+    "User-Agent": "ORM-CMS/1.0 (keyword monitoring bot)",
     "Accept": "application/json",
 }
 
-# Handles to skip — platform noise
+_MASTODON_HEADERS = {
+    "User-Agent": "ORM-CMS/1.0 (social discovery bot)",
+    "Accept": "application/json",
+}
+
+# Handles/usernames to skip — noise accounts
 _SKIP_HANDLES = {
     "search", "hashtag", "i", "intent", "home", "explore",
     "notifications", "messages", "twitter", "x", "AutoModerator",
-    "[deleted]", "deleted",
+    "[deleted]", "deleted", "dang", "pg", "hn",
 }
 
 
@@ -102,59 +112,85 @@ def _parse_nitter_rss(xml_text: str, seen_ids: set) -> list[dict]:
     return results
 
 
-# ── Reddit ───────────────────────────────────────────────────────────────────
+# ── HackerNews via Algolia API ────────────────────────────────────────────────
 
-def _parse_reddit_json(json_text: str) -> list[dict]:
-    """Parse Reddit search JSON API response into post dicts."""
+def _parse_hn_json(json_text: str) -> list[dict]:
+    """Parse HackerNews Algolia search response into post dicts."""
     results = []
     try:
         data = json.loads(json_text)
-        posts = data.get("data", {}).get("children", [])
-        for post in posts:
-            d = post.get("data", {})
-            author = (d.get("author") or "").strip()
+        hits = data.get("hits", [])
+        for hit in hits:
+            author = (hit.get("author") or "").strip()
             if not author or author.lower() in _SKIP_HANDLES:
                 continue
-            title = (d.get("title") or "").strip()
-            selftext = (d.get("selftext") or "").strip()
-            content = (title + (" — " + selftext if selftext else "")).strip()[:500]
+            title = (hit.get("title") or "").strip()
+            story_url = (hit.get("url") or "").strip()
+            content = title
+            if story_url:
+                content = f"{title} — {story_url}"[:500]
             if not content or len(content) < 5:
                 continue
-            post_id = d.get("id", "")
-            if not post_id:
+            obj_id = hit.get("objectID", "")
+            if not obj_id:
                 continue
-            subreddit = d.get("subreddit", "")
-            permalink = d.get("permalink", "")
-            url = (
-                f"https://reddit.com{permalink}"
-                if permalink
-                else f"https://reddit.com/r/{subreddit}/comments/{post_id}"
-            )
-            created = d.get("created_utc", 0)
-            pub_at = (
-                datetime.fromtimestamp(float(created), tz=timezone.utc)
-                if created
-                else datetime.now(timezone.utc)
-            )
+            created = hit.get("created_at", "")
+            pub_at = datetime.now(timezone.utc)
+            if created:
+                try:
+                    pub_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                except Exception:
+                    pass
             results.append({
                 "handle": author,
-                "tweet_id": f"reddit_{post_id}",
+                "tweet_id": f"hn_{obj_id}",
                 "content": content,
-                "url": url,
+                "url": f"https://news.ycombinator.com/item?id={obj_id}",
                 "published_at": pub_at.isoformat(),
-                "platform": "reddit",
-                "subreddit": subreddit,
-                "score": d.get("score", 0),
+                "platform": "hackernews",
+                "score": hit.get("points", 0) or 0,
             })
     except Exception as e:
-        logger.debug("Reddit JSON parse error: %s", e)
+        logger.debug("HackerNews JSON parse error: %s", e)
+    return results
+
+
+# ── Mastodon via mastodon.social accounts API ─────────────────────────────────
+
+def _parse_mastodon_accounts(json_text: str, keyword: str) -> list[dict]:
+    """Parse Mastodon accounts search response into pseudo-post dicts."""
+    results = []
+    try:
+        accounts = json.loads(json_text)
+        if not isinstance(accounts, list):
+            return []
+        for acc in accounts:
+            username = (acc.get("username") or "").strip()
+            if not username or username.lower() in _SKIP_HANDLES:
+                continue
+            display_name = (acc.get("display_name") or username).strip()
+            note = re.sub(r"<[^>]+>", " ", acc.get("note") or "").strip()[:300]
+            content = f"{display_name}: {note}" if note else display_name
+            acc_url = acc.get("url") or f"https://mastodon.social/@{username}"
+            followers = acc.get("followers_count", 0) or 0
+            results.append({
+                "handle": username,
+                "tweet_id": f"masto_{username}",
+                "content": content or f"Mastodon account discussing {keyword}",
+                "url": acc_url,
+                "published_at": datetime.now(timezone.utc).isoformat(),
+                "platform": "mastodon",
+                "score": followers,
+            })
+    except Exception as e:
+        logger.debug("Mastodon accounts parse error: %s", e)
     return results
 
 
 # ── Combined search ───────────────────────────────────────────────────────────
 
 async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
-    """Search Twitter/X (via nitter) + Reddit for posts about keyword.
+    """Search Twitter/X (via nitter) + HackerNews + Mastodon for posts about keyword.
 
     All sources are queried in parallel for speed.
     Returns list of dicts: {handle, content, url, published_at, platform}
@@ -189,23 +225,72 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
             logger.debug("Nitter %s error for '%s': %s", base, kw, e)
         return []
 
-    async def fetch_reddit(
-        session: "httpx.AsyncClient", kw: str, subreddit: str = ""
-    ) -> list[dict]:
+    async def fetch_hackernews(session: "httpx.AsyncClient", kw: str, recent: bool = False) -> list[dict]:
+        """Search HackerNews via Algolia API (reliable, no IP blocking)."""
         try:
             enc = kw.replace(" ", "+").replace('"', "%22")
-            if subreddit:
-                url = (
-                    f"https://www.reddit.com/r/{subreddit}/search.json"
-                    f"?q={enc}&sort=new&restrict_sr=on&limit=25&t=month"
-                )
-            else:
-                url = f"https://www.reddit.com/search.json?q={enc}&sort=new&limit=25&t=month"
-            r = await session.get(url, timeout=12, headers=_REDDIT_HEADERS)
+            endpoint = "search_by_date" if recent else "search"
+            url = f"https://hn.algolia.com/api/v1/{endpoint}?query={enc}&tags=story&hitsPerPage=25"
+            r = await session.get(url, timeout=10, headers=_HN_HEADERS)
             if r.status_code == 200:
-                return _parse_reddit_json(r.text)
+                return _parse_hn_json(r.text)
         except Exception as e:
-            logger.debug("Reddit fetch error for '%s' (r/%s): %s", kw, subreddit or "*", e)
+            logger.debug("HackerNews fetch error for '%s': %s", kw, e)
+        return []
+
+    async def fetch_hackernews_comments(session: "httpx.AsyncClient", kw: str) -> list[dict]:
+        """Search HackerNews comments — surfaces more authors."""
+        try:
+            enc = kw.replace(" ", "+").replace('"', "%22")
+            url = f"https://hn.algolia.com/api/v1/search?query={enc}&tags=comment&hitsPerPage=20"
+            r = await session.get(url, timeout=10, headers=_HN_HEADERS)
+            if r.status_code == 200:
+                data = json.loads(r.text)
+                hits = data.get("hits", [])
+                out = []
+                for hit in hits:
+                    author = (hit.get("author") or "").strip()
+                    if not author or author.lower() in _SKIP_HANDLES:
+                        continue
+                    comment_text = re.sub(r"<[^>]+>", " ", hit.get("comment_text") or "").strip()[:500]
+                    if not comment_text or len(comment_text) < 10:
+                        continue
+                    obj_id = hit.get("objectID", "")
+                    if not obj_id:
+                        continue
+                    created = hit.get("created_at", "")
+                    pub_at = datetime.now(timezone.utc)
+                    if created:
+                        try:
+                            pub_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                        except Exception:
+                            pass
+                    out.append({
+                        "handle": author,
+                        "tweet_id": f"hn_c_{obj_id}",
+                        "content": comment_text,
+                        "url": f"https://news.ycombinator.com/item?id={obj_id}",
+                        "published_at": pub_at.isoformat(),
+                        "platform": "hackernews",
+                        "score": hit.get("points", 0) or 0,
+                    })
+                return out
+        except Exception as e:
+            logger.debug("HackerNews comments error for '%s': %s", kw, e)
+        return []
+
+    async def fetch_mastodon_accounts(session: "httpx.AsyncClient", kw: str) -> list[dict]:
+        """Search Mastodon.social accounts — no auth required for basic account search."""
+        try:
+            enc = kw.replace(" ", "+")
+            url = f"https://mastodon.social/api/v2/search?q={enc}&type=accounts&limit=20&resolve=false"
+            r = await session.get(url, timeout=10, headers=_MASTODON_HEADERS)
+            if r.status_code == 200:
+                data = json.loads(r.text)
+                accounts = data.get("accounts", [])
+                return _parse_mastodon_accounts(json.dumps(accounts), kw)
+        except Exception as e:
+            logger.debug("Mastodon accounts error for '%s': %s", kw, e)
         return []
 
     async with httpx.AsyncClient(
@@ -223,16 +308,18 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
                 for i in range(min(3, len(_NITTER_INSTANCES)))
             ]
 
-        # Reddit — general + India-focused + world subreddits
-        tasks.append(fetch_reddit(session, kw_clean))
-        tasks.append(fetch_reddit(session, kw_clean, "india"))
-        tasks.append(fetch_reddit(session, kw_clean, "worldnews"))
-        tasks.append(fetch_reddit(session, kw_clean, "IndiaSpeaks"))
-        tasks.append(fetch_reddit(session, kw_clean, "IndiaOpen"))
-        # Also try slug (no spaces) if different from keyword
+        # HackerNews — top stories + recent + comments
+        tasks.append(fetch_hackernews(session, kw_clean, recent=False))
+        tasks.append(fetch_hackernews(session, kw_clean, recent=True))
+        tasks.append(fetch_hackernews_comments(session, kw_clean))
+        # Also try slug variant if different
         if slug and slug.lower() != kw_clean.lower():
-            tasks.append(fetch_reddit(session, slug))
-            tasks.append(fetch_reddit(session, slug, "india"))
+            tasks.append(fetch_hackernews(session, slug, recent=False))
+
+        # Mastodon accounts
+        tasks.append(fetch_mastodon_accounts(session, kw_clean))
+        if slug and slug.lower() != kw_clean.lower():
+            tasks.append(fetch_mastodon_accounts(session, slug))
 
         batch = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -245,31 +332,42 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
                 seen_ids.add(tid)
                 results.append(item)
 
-    # Sort Reddit by score desc, Twitter by recency (already ordered by nitter)
+    # Sort each platform's results by score/recency
     twitter_results = [r for r in results if r.get("platform") == "twitter"]
-    reddit_results = sorted(
-        [r for r in results if r.get("platform") == "reddit"],
+    hn_results = sorted(
+        [r for r in results if r.get("platform") == "hackernews"],
+        key=lambda x: x.get("score", 0),
+        reverse=True,
+    )
+    mastodon_results = sorted(
+        [r for r in results if r.get("platform") == "mastodon"],
         key=lambda x: x.get("score", 0),
         reverse=True,
     )
 
-    tw_count, rd_count = len(twitter_results), len(reddit_results)
+    tw_count = len(twitter_results)
+    hn_count = len(hn_results)
+    ms_count = len(mastodon_results)
     if results:
         logger.info(
-            "social_discovery: %d posts for '%s' (twitter=%d, reddit=%d)",
-            len(results), kw_clean, tw_count, rd_count,
+            "social_discovery: %d posts for '%s' (twitter=%d, hackernews=%d, mastodon=%d)",
+            len(results), kw_clean, tw_count, hn_count, ms_count,
         )
     else:
         logger.info("social_discovery: no posts found for '%s'", kw_clean)
 
-    # Interleave: prefer Twitter, pad with Reddit
+    # Interleave: Twitter first, then HN, then Mastodon
     merged: list[dict] = []
-    ti, ri = 0, 0
-    while len(merged) < limit and (ti < len(twitter_results) or ri < len(reddit_results)):
+    ti, hi, mi = 0, 0, 0
+    while len(merged) < limit and (
+        ti < len(twitter_results) or hi < len(hn_results) or mi < len(mastodon_results)
+    ):
         if ti < len(twitter_results):
             merged.append(twitter_results[ti]); ti += 1
-        if ri < len(reddit_results) and len(merged) < limit:
-            merged.append(reddit_results[ri]); ri += 1
+        if hi < len(hn_results) and len(merged) < limit:
+            merged.append(hn_results[hi]); hi += 1
+        if mi < len(mastodon_results) and len(merged) < limit:
+            merged.append(mastodon_results[mi]); mi += 1
     return merged
 
 
@@ -291,6 +389,7 @@ _ANTI_WORDS = {
     "remove", "out", "failed", "useless", "pathetic", "disgrace", "exposed",
     "arrest", "jail", "fake", "propaganda", "lies", "lying", "deceptive",
     "incompetent", "terrible", "horrible", "outrage", "protest", "demand",
+    "refused", "ruthless", "hate speech", "surveillance", "authoritarian",
 }
 
 
