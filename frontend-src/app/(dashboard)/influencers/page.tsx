@@ -18,21 +18,34 @@ const STANCE_ICON: Record<string, any> = {
   Pro: TrendingUp, Anti: TrendingDown, Mixed: Minus,
 };
 
-function InfluencerCard({ inf, idx }: { inf: any; idx: number }) {
+function InfluencerCard({ inf, idx, onRemove }: { inf: any; idx: number; onRemove?: (id: string) => void }) {
   const Icon = STANCE_ICON[inf.stance] ?? Minus;
   const total = inf.positive_count + inf.negative_count || 1;
   const posP = Math.round((inf.positive_count / total) * 100);
   const negP = Math.round((inf.negative_count / total) * 100);
+  const isDiscovered = inf.source === "twitter" || inf.source === "reddit";
 
   return (
-    <Card className="space-y-3">
+    <Card className={cn("space-y-3", isDiscovered && "border-l-4 border-l-purple-400")}>
       <div className="flex items-start gap-3">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent/10 text-xs font-bold text-accent">
-          #{idx + 1}
+        <div className={cn(
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold",
+          isDiscovered
+            ? "bg-purple-100 dark:bg-purple-900/30 text-purple-600"
+            : "bg-accent/10 text-accent"
+        )}>
+          {isDiscovered ? <Twitter className="h-4 w-4" /> : `#${idx + 1}`}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold truncate">{inf.name}</span>
+            {inf.profile_url ? (
+              <a href={inf.profile_url} target="_blank" rel="noreferrer"
+                className="text-sm font-semibold truncate text-accent hover:underline">
+                {inf.name}
+              </a>
+            ) : (
+              <span className="text-sm font-semibold truncate">{inf.name}</span>
+            )}
             <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold flex items-center gap-1", STANCE_COLOR[inf.stance])}>
               <Icon className="h-3 w-3" />{inf.stance}
             </span>
@@ -40,23 +53,34 @@ function InfluencerCard({ inf, idx }: { inf: any; idx: number }) {
               <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 text-[10px]">
                 <Newspaper className="h-2.5 w-2.5 mr-1" />Media Outlet
               </Badge>
+            ) : isDiscovered ? (
+              <Badge className="bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 text-[10px]">
+                <Twitter className="h-2.5 w-2.5 mr-1" />Twitter/X
+              </Badge>
             ) : (
               <Badge className="bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 text-[10px]">
                 <MessageSquare className="h-2.5 w-2.5 mr-1" />Social
               </Badge>
             )}
-            {inf.total_mentions >= 100 && (
+            {inf.total_mentions >= 5 && (
               <Badge className="bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300 text-[10px]">
-                <Zap className="h-2.5 w-2.5 mr-1" />Viral
+                <Zap className="h-2.5 w-2.5 mr-1" />Active
               </Badge>
             )}
           </div>
           <div className="flex items-center gap-3 mt-1 text-xs text-muted">
-            <span className="font-medium">{inf.total_mentions.toLocaleString()} mentions</span>
+            <span className="font-medium">{inf.total_mentions.toLocaleString()} {isDiscovered ? "posts" : "mentions"}</span>
             <span className="text-emerald-600 font-medium">+{inf.positive_count} pro</span>
             <span className="text-red-500 font-medium">−{inf.negative_count} anti</span>
+            {inf.keyword && <span className="opacity-60">#{inf.keyword}</span>}
           </div>
         </div>
+        {isDiscovered && onRemove && inf._discoveredId && (
+          <button onClick={() => onRemove(inf._discoveredId)}
+            className="text-muted hover:text-red-500 shrink-0 transition-colors" title="Remove">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
 
       <div className="flex gap-1 h-2 rounded-full overflow-hidden bg-slate-100 dark:bg-slate-800">
@@ -71,7 +95,7 @@ function InfluencerCard({ inf, idx }: { inf: any; idx: number }) {
             <a key={i} href={p.url} target="_blank" rel="noreferrer"
               className="flex items-start gap-1.5 text-[11px] text-muted hover:text-accent group">
               <ExternalLink className="h-3 w-3 mt-0.5 shrink-0 group-hover:text-accent" />
-              <span className="line-clamp-1">{p.title || p.url}</span>
+              <span className="line-clamp-2">{p.title || p.url}</span>
               {p.published_at && <span className="shrink-0 text-muted/60 ml-auto">{p.published_at}</span>}
             </a>
           ))}
@@ -149,6 +173,7 @@ export default function InfluencersPage() {
   const [filter, setFilter]     = useState<"all" | "pro" | "anti">("all");
   const [typeFilter, setTypeFilter] = useState<"all" | "press" | "social">("all");
   const reportRef = useRef<HTMLDivElement>(null);
+  const autoDiscoveredRef = useRef<Set<string>>(new Set());
 
   // Social discovery state
   const [discoverKeyword, setDiscoverKeyword] = useState("");
@@ -195,6 +220,27 @@ export default function InfluencersPage() {
     if (clientId) loadDiscovered(clientId, activeKeyword);
   }, [clientId, activeKeyword, loadDiscovered]);
 
+  // Auto-discover for client name on first visit (when no previous discoveries exist)
+  useEffect(() => {
+    if (!clientId || !clientName || discoverLoading) return;
+    if (autoDiscoveredRef.current.has(clientId)) return;
+    autoDiscoveredRef.current.add(clientId);
+    if (discoverKeywords.length === 0) {
+      setDiscoverStatus(`Auto-discovering influencers for "${clientName}" on Twitter/X...`);
+      api.post("/social-listening/discover", {
+        client_id: clientId,
+        keyword: clientName,
+        platform: "twitter",
+        limit: 50,
+      }).then(() => {
+        setTimeout(() => {
+          loadDiscovered(clientId, null);
+          setDiscoverStatus("");
+        }, 28000);
+      }).catch(() => { setDiscoverStatus(""); });
+    }
+  }, [clientId, clientName, discoverLoading, discoverKeywords.length, loadDiscovered]);
+
   function handleClientChange(id: string) {
     setClientId(id);
     const c = clients.find((c) => c.id === id);
@@ -232,9 +278,31 @@ export default function InfluencersPage() {
     setDiscovered((prev) => prev.filter((d) => d.id !== id));
   }
 
+  // Normalize discovered Twitter accounts to the same shape as allInfluencers entries
+  const discoveredNormalized = discovered.map((d: any) => ({
+    name: `@${d.handle}`,
+    type: "social" as const,
+    source: d.platform || "twitter",
+    stance: d.stance,
+    total_mentions: d.total_posts,
+    positive_count: d.positive_count,
+    negative_count: d.negative_count,
+    profile_url: d.profile_url,
+    keyword: d.keyword,
+    _discoveredId: d.id,
+    posts: (d.posts || []).map((p: any) => ({
+      url: p.url,
+      title: p.content ? p.content.slice(0, 80) : p.url,
+      published_at: p.published_at
+        ? new Date(p.published_at).toLocaleDateString("en-IN")
+        : "",
+    })),
+  }));
+
   const allInfluencers = [
     ...(data?.press || []).map((i: any) => ({ ...i, type: "press" })),
-    ...(data?.social || []).map((i: any) => ({ ...i, type: "social" })),
+    ...(data?.social || []).map((i: any) => ({ ...i, type: "social", source: "mention" })),
+    ...discoveredNormalized,
   ]
     .filter((i) => filter === "all" || i.stance.toLowerCase() === filter)
     .filter((i) => typeFilter === "all" || i.type === typeFilter)
@@ -243,7 +311,7 @@ export default function InfluencersPage() {
   const proCount    = allInfluencers.filter((i) => i.stance === "Pro").length;
   const antiCount   = allInfluencers.filter((i) => i.stance === "Anti").length;
   const pressCount  = (data?.press || []).length;
-  const socialCount = (data?.social || []).length;
+  const socialCount = (data?.social || []).length + discovered.length;
   const viralThreshold = data?.viral_threshold ?? 10;
 
   async function downloadReport() {
@@ -453,10 +521,9 @@ ${mixed.length > 0 ? `<h2>Mixed / Neutral (${mixed.length})</h2>${section("", "#
       <div className="rounded-xl border border-blue-200 bg-blue-50 dark:border-blue-800/40 dark:bg-blue-900/10 px-4 py-2.5 text-xs text-blue-700 dark:text-blue-400 flex items-start gap-2">
         <Info className="h-4 w-4 mt-0.5 shrink-0" />
         <span>
-          <b>What you see here:</b> Media outlets are tracked from RSS/YouTube press sources. Social influencers are real named accounts
-          who commented on your posts with {viralThreshold}+ interactions and measurable pro/anti sentiment.
-          To expand social influencer reach (Twitter/X accounts, Instagram commenters), connect those platforms in{" "}
-          <b>Press Sources</b>.
+          <b>What you see here:</b> Media outlets (from RSS/press sources) + social commenters + Twitter/X accounts
+          discovered via keyword search below. Twitter accounts are shown with a purple left border and Twitter badge.
+          Use <b>Discover More Social Influencers</b> below to extract accounts talking about any keyword on Twitter/X.
         </span>
       </div>
 
@@ -469,17 +536,19 @@ ${mixed.length > 0 ? `<h2>Mixed / Neutral (${mixed.length})</h2>${section("", "#
       ) : allInfluencers.length === 0 ? (
         <Card className="py-12 text-center text-muted">
           <Users className="mx-auto mb-2 h-10 w-10 opacity-25" />
-          <p className="text-sm font-medium">No verified influencers found</p>
+          <p className="text-sm font-medium">No influencers found yet</p>
           <p className="mt-1 text-xs max-w-sm mx-auto">
-            {typeFilter === "social"
-              ? `No social accounts with ${viralThreshold}+ interactions and real pro/anti sentiment found. Anonymous placeholder accounts (citizen_XXXXX) are excluded.`
-              : "Connect press sources and sync social accounts to build the influencer map."}
+            {discoverLoading || discoverStatus
+              ? "Discovering social influencers from Twitter/X — results will appear here in 20–30 seconds."
+              : typeFilter === "social"
+              ? `Use the "Discover Social Influencers" section below to extract real Twitter/X accounts talking about ${clientName}.`
+              : "Connect press sources and use the discover tool below to build the influencer map."}
           </p>
         </Card>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {allInfluencers.map((inf, i) => (
-            <InfluencerCard key={`${inf.type}-${inf.name}-${i}`} inf={inf} idx={i} />
+            <InfluencerCard key={`${inf.type}-${inf.name}-${i}`} inf={inf} idx={i} onRemove={removeDiscovered} />
           ))}
         </div>
       )}
@@ -547,17 +616,15 @@ ${mixed.length > 0 ? `<h2>Mixed / Neutral (${mixed.length})</h2>${section("", "#
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Twitter className="h-5 w-5 text-[#1DA1F2]" /> Discover Social Influencers
+              <Twitter className="h-5 w-5 text-[#1DA1F2]" /> Discover More Social Influencers
             </h2>
             <p className="text-xs text-muted">
-              Search Twitter/X for real accounts talking about your client. AI classifies each as Pro or Anti.
+              Search Twitter/X by keyword — AI classifies accounts as Pro or Anti and adds them to the list above.
             </p>
           </div>
-          {discovered.length > 0 && (
-            <Button variant="ghost" onClick={() => loadDiscovered(clientId, activeKeyword)} disabled={discoverLoading}>
-              <RefreshCw className={cn("h-4 w-4", discoverLoading && "animate-spin")} />
-            </Button>
-          )}
+          <Button variant="ghost" onClick={() => loadDiscovered(clientId, null)} disabled={discoverLoading}>
+            <RefreshCw className={cn("h-4 w-4", discoverLoading && "animate-spin")} />
+          </Button>
         </div>
 
         {/* Keyword input */}
@@ -581,64 +648,36 @@ ${mixed.length > 0 ? `<h2>Mixed / Neutral (${mixed.length})</h2>${section("", "#
 
         {discoverStatus && (
           <div className="rounded-xl border border-purple-200 bg-purple-50 dark:border-purple-800/40 dark:bg-purple-900/10 px-4 py-2.5 text-xs text-purple-700 dark:text-purple-300 flex items-center gap-2">
-            {discovering && <RefreshCw className="h-3.5 w-3.5 animate-spin shrink-0" />}
+            <RefreshCw className="h-3.5 w-3.5 animate-spin shrink-0" />
             {discoverStatus}
           </div>
         )}
 
-        {/* Keyword filter tabs */}
+        {/* Keywords previously discovered */}
         {discoverKeywords.length > 0 && (
           <div className="flex flex-wrap gap-2 items-center">
-            <span className="text-xs text-muted">Filter by keyword:</span>
-            <button
-              onClick={() => setActiveKeyword(null)}
-              className={cn(
-                "rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                activeKeyword === null ? "bg-accent text-white" : "bg-card border border-border text-muted hover:text-fg"
-              )}>
-              All
-            </button>
+            <span className="text-xs text-muted">Keywords searched:</span>
             {discoverKeywords.map((kw) => (
-              <button key={kw} onClick={() => setActiveKeyword(kw)}
-                className={cn(
-                  "rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                  activeKeyword === kw ? "bg-accent text-white" : "bg-card border border-border text-muted hover:text-fg"
-                )}>
+              <span key={kw}
+                className="rounded-full px-3 py-1 text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
                 #{kw}
-              </button>
+              </span>
             ))}
+            <span className="text-xs text-muted ml-1">
+              — {discovered.length} accounts found, shown above with Twitter/X badge
+            </span>
           </div>
         )}
 
-        {/* Discovered influencer grid */}
-        {discoverLoading ? (
-          <div className="flex items-center justify-center gap-2 py-8 text-muted">
-            <RefreshCw className="h-5 w-5 animate-spin" />
-            <span className="text-sm">Loading discovered influencers…</span>
-          </div>
-        ) : discovered.length === 0 ? (
-          <Card className="py-8 text-center text-muted border-dashed">
+        {discovered.length === 0 && !discoverStatus && (
+          <Card className="py-6 text-center text-muted border-dashed">
             <Globe className="mx-auto mb-2 h-8 w-8 opacity-25" />
-            <p className="text-sm font-medium">No social influencers discovered yet</p>
+            <p className="text-sm font-medium">No Twitter/X influencers discovered yet</p>
             <p className="mt-1 text-xs max-w-xs mx-auto">
-              Enter a keyword above (e.g., "BJP", "#Congress", "Modi") and click Discover Now.
-              We'll search Twitter/X and classify accounts as Pro or Anti.
+              Enter a keyword (e.g., "{clientName || "BJP"}", "#Congress") and click Discover Now.
+              Found accounts appear above in the influencer grid with a Twitter badge.
             </p>
           </Card>
-        ) : (
-          <>
-            <div className="flex items-center gap-3 text-sm">
-              <span className="font-medium">{discovered.length} accounts discovered</span>
-              <span className="text-emerald-600">{discovered.filter(d => d.stance === "Pro").length} Pro</span>
-              <span className="text-red-500">{discovered.filter(d => d.stance === "Anti").length} Anti</span>
-              <span className="text-muted">{discovered.filter(d => d.stance === "Mixed").length} Mixed</span>
-            </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {discovered.map((inf) => (
-                <DiscoveredCard key={inf.id} inf={inf} onRemove={removeDiscovered} />
-              ))}
-            </div>
-          </>
         )}
       </div>
     </div>

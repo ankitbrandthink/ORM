@@ -18,6 +18,9 @@ _NITTER_INSTANCES = [
     "https://nitter.net",
     "https://nitter.cz",
     "https://nitter.unixfox.eu",
+    "https://nitter.poast.org",
+    "https://nitter.1d4.us",
+    "https://nitter.kavin.rocks",
 ]
 
 _RSS_HEADERS = {
@@ -30,90 +33,118 @@ _RSS_HEADERS = {
 _SKIP_HANDLES = {"search", "hashtag", "i", "intent", "home", "explore", "notifications", "messages"}
 
 
-async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
-    """Search nitter RSS for tweets about keyword.
+def _parse_nitter_rss(xml_text: str, seen_ids: set) -> list[dict]:
+    """Parse nitter RSS XML and return new tweet dicts, updating seen_ids in place."""
+    import xml.etree.ElementTree as ET
+    results = []
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+    for item in root.findall(".//item"):
+        try:
+            title = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            pub_raw = item.findtext("pubDate") or ""
+            desc = (item.findtext("description") or "").strip()
 
+            content = re.sub(r"^[^:]+:\s*", "", title, count=1).strip()
+            if not content and desc:
+                content = re.sub(r"<[^>]+>", " ", desc).strip()[:500]
+            if not content or len(content) < 5:
+                continue
+
+            m = re.search(r"/([^/]+)/status/(\d+)", link)
+            if not m:
+                continue
+            handle = m.group(1)
+            tweet_id = m.group(2)
+
+            if handle.lower() in _SKIP_HANDLES:
+                continue
+            if tweet_id in seen_ids:
+                continue
+            seen_ids.add(tweet_id)
+
+            pub_at = datetime.now(timezone.utc)
+            if pub_raw:
+                try:
+                    pub_at = parsedate_to_datetime(pub_raw).astimezone(timezone.utc)
+                except Exception:
+                    pass
+
+            results.append({
+                "handle": handle,
+                "tweet_id": tweet_id,
+                "content": content[:500],
+                "url": f"https://x.com/{handle}/status/{tweet_id}",
+                "published_at": pub_at.isoformat(),
+            })
+        except Exception:
+            continue
+    return results
+
+
+async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
+    """Search nitter RSS for tweets about keyword using all instances in parallel.
+
+    Tries multiple keyword variants and all nitter instances concurrently.
     Returns list of dicts: {handle, content, url, published_at (ISO str)}
     """
     try:
+        import asyncio
         import httpx
-        import xml.etree.ElementTree as ET
     except ImportError:
         return []
 
-    encoded = keyword.replace(" ", "+").replace("#", "%23").replace("@", "%40")
+    kw_clean = keyword.strip()
+    # Build keyword variants: original + hashtag variant
+    slug = re.sub(r"[^a-zA-Z0-9]", "", kw_clean)
+    variants = [kw_clean]
+    if slug and not kw_clean.startswith("#") and slug.lower() != kw_clean.lower():
+        variants.append(f"#{slug}")
+    # For multi-word, also try quoted version
+    if " " in kw_clean and len(kw_clean) <= 25:
+        variants.append(f'"{kw_clean}"')
+
+    seen_ids: set = set()
     results: list[dict] = []
 
-    for base in _NITTER_INSTANCES:
-        if len(results) >= limit:
-            break
+    async def fetch_one(session: "httpx.AsyncClient", base: str, kw: str) -> list[dict]:
+        enc = kw.replace(" ", "+").replace("#", "%23").replace("@", "%40").replace('"', "%22")
+        url = f"{base}/search/rss?q={enc}&f=tweets"
         try:
-            url = f"{base}/search/rss?q={encoded}&f=tweets"
-            async with httpx.AsyncClient(headers=_RSS_HEADERS, timeout=15, follow_redirects=True) as client:
-                r = await client.get(url)
-                if r.status_code != 200:
-                    logger.debug("Nitter %s returned %s for keyword '%s'", base, r.status_code, keyword)
-                    continue
-
-                try:
-                    root = ET.fromstring(r.text)
-                except ET.ParseError:
-                    continue
-
-                for item in root.findall(".//item"):
-                    if len(results) >= limit:
-                        break
-                    try:
-                        title = (item.findtext("title") or "").strip()
-                        link = (item.findtext("link") or "").strip()
-                        pub_raw = item.findtext("pubDate") or ""
-                        desc = (item.findtext("description") or "").strip()
-
-                        # Nitter title format: "Handle: tweet content"
-                        content = re.sub(r"^[^:]+:\s*", "", title, count=1).strip()
-                        if not content and desc:
-                            # strip HTML from description
-                            content = re.sub(r"<[^>]+>", " ", desc).strip()[:500]
-                        if not content or len(content) < 5:
-                            continue
-
-                        # Extract handle + tweet_id from nitter link:
-                        # https://nitter.xyz/handle/status/12345#m
-                        m = re.search(r"/([^/]+)/status/(\d+)", link)
-                        if not m:
-                            continue
-                        handle = m.group(1)
-                        tweet_id = m.group(2)
-
-                        if handle.lower() in _SKIP_HANDLES:
-                            continue
-
-                        pub_at = datetime.now(timezone.utc)
-                        if pub_raw:
-                            try:
-                                pub_at = parsedate_to_datetime(pub_raw).astimezone(timezone.utc)
-                            except Exception:
-                                pass
-
-                        results.append({
-                            "handle": handle,
-                            "tweet_id": tweet_id,
-                            "content": content[:500],
-                            "url": f"https://x.com/{handle}/status/{tweet_id}",
-                            "published_at": pub_at.isoformat(),
-                        })
-                    except Exception:
-                        continue
-
-                if results:
-                    logger.info("social_discovery: found %d tweets for '%s' via %s", len(results), keyword, base)
-                    break  # first working instance wins
-
+            r = await session.get(url)
+            if r.status_code == 200:
+                return _parse_nitter_rss(r.text, set())  # local dedup happens after merge
         except Exception as e:
-            logger.debug("Nitter %s search failed for '%s': %s", base, keyword, e)
-            continue
+            logger.debug("Nitter %s fetch error for '%s': %s", base, kw, e)
+        return []
 
-    return results
+    async with httpx.AsyncClient(headers=_RSS_HEADERS, timeout=12, follow_redirects=True) as session:
+        # Build tasks: all instances × primary keyword, plus hashtag variant on first 2 instances
+        tasks = [fetch_one(session, base, kw_clean) for base in _NITTER_INSTANCES]
+        if len(variants) > 1:
+            tasks += [fetch_one(session, _NITTER_INSTANCES[i], variants[1])
+                      for i in range(min(2, len(_NITTER_INSTANCES)))]
+
+        batch = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for res in batch:
+        if not isinstance(res, list):
+            continue
+        for item in res:
+            tid = item.get("tweet_id", "")
+            if tid and tid not in seen_ids:
+                seen_ids.add(tid)
+                results.append(item)
+
+    if results:
+        logger.info("social_discovery: found %d unique tweets for '%s' across all instances", len(results), kw_clean)
+    else:
+        logger.info("social_discovery: no tweets found for '%s' from any instance", kw_clean)
+
+    return results[:limit]
 
 
 # ── Lexicon-based stance detection (fast, no AI needed) ─────────────────────
