@@ -205,7 +205,7 @@ export default function InfluencersPage() {
   async function handleDiscover() {
     if (!discoverKeyword.trim() || !clientId) return;
     setDiscovering(true);
-    setDiscoverStatus("Searching Twitter/X for accounts talking about "" + discoverKeyword + ""…");
+    setDiscoverStatus(`Searching Twitter/X for accounts talking about "${discoverKeyword}"...`);
     try {
       await api.post("/social-listening/discover", {
         client_id: clientId,
