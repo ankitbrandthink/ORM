@@ -199,7 +199,7 @@ def _import_rows(db: Session, tenant, client, monitor, rows: list[dict],
         csent = _norm_sent(_find_col(row, "COMMENT SENTIMENT", "COMMENTS SENTIMENT")) or psent
         narrative = (_find_col(row, "NARRATIVE", "DESCRIPTION", "CONTENT", "CAPTION",
                                "POST CONTENT", "POST TEXT") or "(no narrative)")
-        existing  = _to_int(_find_col(row, "EXISTING", "EXISTING COMMENTS", "COMMENT COUNT"))
+        existing  = _to_int(_find_col(row, "EXISTING COMMENT NO", "EXISTING", "EXISTING COMMENTS", "COMMENT COUNT"))
         to_add    = _to_int(_find_col(row, "COMMENTS TO ADD", "TO ADD", "ADD"))
         real_total = (existing + to_add) or existing or 50
 
@@ -510,14 +510,52 @@ async def import_csv_upload(
 # ── Google Sheets helpers ─────────────────────────────────────────────────────
 
 def _get_tabs_gviz(spreadsheet_id: str) -> list[str]:
-    url = f"https://spreadsheets.google.com/feeds/worksheets/{spreadsheet_id}/public/basic?alt=json"
+    """Get tab names from a public Google Sheet (no API key).
+
+    The old Feeds v3 API (spreadsheets.google.com/feeds/worksheets) was shut
+    down in 2021.  We use two modern strategies instead:
+
+    1. Parse sheet names from the /htmlview HTML page.
+    2. Probe gid=0..9 via gviz/tq and return synthetic __gid_N__ placeholders
+       so _fetch_tab_csv can still retrieve the data by gid.
+    """
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+    # ── Strategy 1: parse HTML tab list ──────────────────────────────────────
     try:
-        with urllib.request.urlopen(url, timeout=10) as r:
-            import json
-            data = json.loads(r.read())
-            return [e["title"]["$t"] for e in data.get("feed", {}).get("entry", [])]
+        req = urllib.request.Request(
+            f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/htmlview",
+            headers={"User-Agent": ua},
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            html = r.read().decode("utf-8", errors="replace")
+        for pattern in [
+            r'id="sheet-button-[^"]*"[^>]*>\s*([^<]+?)\s*<',   # button label
+            r'data-name="([^"]+)"',                              # data-name attr
+            r'"title"\s*:\s*"([^"]+)"\s*,\s*"index"\s*:\s*\d+', # JSON embed
+        ]:
+            names = [m.strip() for m in re.findall(pattern, html, re.IGNORECASE)
+                     if m.strip() and m.strip() != "+"]
+            if names:
+                return names
     except Exception:
-        return []
+        pass
+
+    # ── Strategy 2: probe gid 0..9 via gviz/tq (still works for public sheets)
+    found: list[str] = []
+    for gid in range(10):
+        try:
+            probe = (f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
+                     f"/gviz/tq?tqx=out:csv&gid={gid}&range=A1:B3")
+            req = urllib.request.Request(probe, headers={"User-Agent": ua})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                content = r.read().decode("utf-8", errors="replace")
+            # A valid sheet returns CSV; an invalid gid returns an HTML error page
+            if content.strip() and not content.strip().startswith("<"):
+                found.append(f"__gid_{gid}__")
+        except Exception:
+            pass
+    return found
 
 
 def _get_tabs_api(spreadsheet_id: str, api_key: str) -> list[str]:
@@ -535,18 +573,24 @@ def _get_tabs_api(spreadsheet_id: str, api_key: str) -> list[str]:
 def _fetch_tab_csv(spreadsheet_id: str, sheet_name: str, api_key: str = "") -> list[dict] | None:
     if api_key:
         return _fetch_tab_api(spreadsheet_id, sheet_name, api_key)
-    enc = urllib.parse.quote(sheet_name)
-    url = (f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
-           f"/gviz/tq?tqx=out:csv&sheet={enc}&range=A1:P500")
+    # __gid_N__ placeholders come from the gid-probe fallback in _get_tabs_gviz
+    if sheet_name.startswith("__gid_") and sheet_name.endswith("__"):
+        gid = sheet_name[6:-2]
+        url = (f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
+               f"/gviz/tq?tqx=out:csv&gid={gid}&range=A1:P500")
+    else:
+        enc = urllib.parse.quote(sheet_name)
+        url = (f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
+               f"/gviz/tq?tqx=out:csv&sheet={enc}&range=A1:P500")
     try:
         with urllib.request.urlopen(url, timeout=15) as r:
             content = r.read().decode("utf-8")
-            reader = csv.DictReader(io.StringIO(content))
-            rows = list(reader)
-            # Find header row with meaningful columns if the first row is blank
-            if rows and not any(str(v).strip() for v in list(rows[0].values())[:3]):
-                return rows[1:]
-            return rows
+        reader = csv.DictReader(io.StringIO(content))
+        rows = list(reader)
+        # Skip first row if it looks like a blank/merged header
+        if rows and not any(str(v).strip() for v in list(rows[0].values())[:3]):
+            return rows[1:]
+        return rows
     except Exception:
         return None
 
