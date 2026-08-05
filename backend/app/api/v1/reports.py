@@ -621,6 +621,21 @@ def _post_ids_for_client(db: Session, client_id: str):
     return [r for (r,) in q.all()]
 
 
+def _post_id_subq(db: Session, client_id: str):
+    """Return a SQLAlchemy subquery for Post IDs belonging to a client.
+    Avoids materialising a large Python IN list for high-volume queries."""
+    profile_subq = (db.query(SocialProfile.id)
+                    .filter(SocialProfile.client_id == client_id)
+                    .subquery())
+    return (db.query(Post.id)
+            .filter(
+                Post.is_deleted == False,
+                or_(Post.client_id == client_id,
+                    Post.social_profile_id.in_(profile_subq)),
+            )
+            .subquery())
+
+
 @router.get("/daily-clients")
 def daily_clients_summary(current: CurrentUser = Depends(get_current_user),
                           db: Session = Depends(get_db),
@@ -636,41 +651,35 @@ def daily_clients_summary(current: CurrentUser = Depends(get_current_user),
 
     result = []
     for client in clients:
-        post_ids = _post_ids_for_client(db, client.id)
+        # Use a subquery so we never materialise tens-of-thousands of IDs in Python
+        post_subq = _post_id_subq(db, client.id)
 
-        # Post count: filter by published_at when a date range is requested
-        if (date_from or date_to) and post_ids:
-            pq = db.query(func.count(Post.id)).filter(Post.id.in_(post_ids))
-            if date_from:
-                pq = pq.filter(Post.published_at >= date_from)
-            if date_to:
-                pq = pq.filter(Post.published_at <= date_to + " 23:59:59")
-            post_count = pq.scalar() or 0
-        else:
-            post_count = len(post_ids)
+        # Post count
+        pq = db.query(func.count(Post.id)).filter(Post.id.in_(post_subq))
+        if date_from:
+            pq = pq.filter(Post.published_at >= date_from)
+        if date_to:
+            pq = pq.filter(Post.published_at <= date_to + " 23:59:59")
+        post_count = pq.scalar() or 0
 
-        if post_ids:
-            # Sentiment breakdown for percentage calculation
-            ca_q = (db.query(CommentAnalysis.sentiment, func.count())
-                    .join(Comment, Comment.id == CommentAnalysis.comment_id)
-                    .filter(Comment.post_id.in_(post_ids),
-                            CommentAnalysis.is_deleted == False))
-            if date_from:
-                ca_q = ca_q.filter(Comment.published_at >= date_from)
-            if date_to:
-                ca_q = ca_q.filter(Comment.published_at <= date_to + " 23:59:59")
-            sent_rows = ca_q.group_by(CommentAnalysis.sentiment).all()
+        # Sentiment breakdown for percentage calculation
+        ca_q = (db.query(CommentAnalysis.sentiment, func.count())
+                .join(Comment, Comment.id == CommentAnalysis.comment_id)
+                .filter(Comment.post_id.in_(post_subq),
+                        CommentAnalysis.is_deleted == False))
+        if date_from:
+            ca_q = ca_q.filter(Comment.published_at >= date_from)
+        if date_to:
+            ca_q = ca_q.filter(Comment.published_at <= date_to + " 23:59:59")
+        sent_rows = ca_q.group_by(CommentAnalysis.sentiment).all()
 
-            # Total comments in date range (seeded + real, regardless of analysis)
-            cq = db.query(func.count(Comment.id)).filter(Comment.post_id.in_(post_ids))
-            if date_from:
-                cq = cq.filter(Comment.published_at >= date_from)
-            if date_to:
-                cq = cq.filter(Comment.published_at <= date_to + " 23:59:59")
-            total_comments = cq.scalar() or 0
-        else:
-            sent_rows = []
-            total_comments = 0
+        # Total comments in date range (seeded + real, regardless of analysis)
+        cq = db.query(func.count(Comment.id)).filter(Comment.post_id.in_(post_subq))
+        if date_from:
+            cq = cq.filter(Comment.published_at >= date_from)
+        if date_to:
+            cq = cq.filter(Comment.published_at <= date_to + " 23:59:59")
+        total_comments = cq.scalar() or 0
 
         sentiment = {"Positive": 0, "Negative": 0, "Neutral": 0}
         for s, c in sent_rows:
@@ -680,12 +689,12 @@ def daily_clients_summary(current: CurrentUser = Depends(get_current_user),
         pos_pct = round(sentiment["Positive"] * 100 / pct_div)
         neg_pct = round(sentiment["Negative"] * 100 / pct_div)
 
-        narrative_texts = ([n for (n,) in
+        narrative_texts = [n for (n,) in
             db.query(PostAnalysis.main_narrative)
-            .filter(PostAnalysis.post_id.in_(post_ids),
+            .filter(PostAnalysis.post_id.in_(post_subq),
                     PostAnalysis.is_deleted == False,
                     PostAnalysis.main_narrative.isnot(None))
-            .limit(50).all()] if post_ids else [])
+            .limit(50).all()]
         top_topics = _extract_top_words(narrative_texts)
 
         # latest_date: when filtered show the filter boundary, else actual latest post date
@@ -694,8 +703,7 @@ def daily_clients_summary(current: CurrentUser = Depends(get_current_user),
         elif date_from:
             display_date = date_from
         else:
-            ld = (db.query(func.max(Post.published_at))
-                  .filter(Post.id.in_(post_ids)).scalar() if post_ids else None)
+            ld = db.query(func.max(Post.published_at)).filter(Post.id.in_(post_subq)).scalar()
             display_date = str(ld)[:10] if ld else None
 
         result.append({
