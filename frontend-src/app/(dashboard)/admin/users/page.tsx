@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Eye, EyeOff, Mail, CheckCircle2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Card, Button, Badge } from "@/components/ui/primitives";
 import { Modal, Field, InfoDot, inputClass } from "@/components/ui/help";
@@ -18,9 +18,12 @@ const blank = { id: "", email: "", full_name: "", role: "Viewer", is_active: tru
 export default function SettingsUsersPage() {
   const [users, setUsers] = useState<any[]>([]);
   const [flags, setFlags] = useState<any[]>([]);
-  const [editing, setEditing] = useState<any>(null);   // user being edited (or blank for new)
+  const [editing, setEditing] = useState<any>(null);
   const [isNew, setIsNew] = useState(false);
   const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [resetSent, setResetSent] = useState<string>(""); // userId that just got a reset link
+  const [resetSending, setResetSending] = useState<string>(""); // userId currently sending
 
   function load() {
     api.get("/users").then((r) => setUsers(r.data || [])).catch(() => {});
@@ -28,12 +31,14 @@ export default function SettingsUsersPage() {
   }
   useEffect(load, []);
 
-  function openNew() { setIsNew(true); setEditing({ ...blank }); setError(""); }
+  function openNew() { setIsNew(true); setEditing({ ...blank }); setError(""); setShowPassword(false); }
   function openEdit(u: any) {
     setIsNew(false);
     setEditing({ id: u.id, email: u.email, full_name: u.full_name || "",
       role: u.roles?.[0] || "Viewer", is_active: u.is_active, password: "" });
     setError("");
+    setShowPassword(false);
+    setResetSent("");
   }
 
   async function save() {
@@ -52,6 +57,19 @@ export default function SettingsUsersPage() {
       setEditing(null); load();
     } catch (e: any) {
       setError(e?.response?.data?.detail || "Could not save. Please check the details.");
+    }
+  }
+
+  async function sendResetLink(userId: string) {
+    setResetSending(userId);
+    setResetSent("");
+    try {
+      await api.post(`/auth/send-reset-link/${userId}`);
+      setResetSent(userId);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || "Could not send reset link.");
+    } finally {
+      setResetSending("");
     }
   }
 
@@ -163,10 +181,42 @@ export default function SettingsUsersPage() {
             )}
             <Field label={isNew ? "Password" : "New password (optional)"}
               required={isNew} hint={isNew ? "Set a starting password." : "Leave blank to keep the current one."}>
-              <input className={inputClass} type="password" value={editing.password}
-                onChange={(e) => setEditing({ ...editing, password: e.target.value })}
-                placeholder="••••••••" />
+              <div className="relative">
+                <input className={inputClass + " pr-10"} type={showPassword ? "text" : "password"}
+                  value={editing.password}
+                  onChange={(e) => setEditing({ ...editing, password: e.target.value })}
+                  placeholder="••••••••" />
+                <button type="button" onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+                  tabIndex={-1}>
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </Field>
+
+            {/* Send reset link — only for existing users */}
+            {!isNew && (
+              <div className="rounded-lg border border-border bg-card/50 p-3 space-y-1.5">
+                <p className="text-xs font-medium text-muted">Password reset link</p>
+                <p className="text-xs text-muted">
+                  Send a one-click reset link to <span className="font-medium text-foreground">{editing.email}</span>. The link expires in 1 hour.
+                </p>
+                {resetSent === editing.id ? (
+                  <div className="flex items-center gap-1.5 text-xs text-green-600 font-medium">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Reset link sent to {editing.email}
+                  </div>
+                ) : (
+                  <Button variant="ghost"
+                    onClick={() => sendResetLink(editing.id)}
+                    disabled={resetSending === editing.id}
+                    className="h-7 px-2 text-xs text-blue-600 hover:bg-blue-500/10">
+                    <Mail className="h-3.5 w-3.5 mr-1" />
+                    {resetSending === editing.id ? "Sending…" : "Send reset link"}
+                  </Button>
+                )}
+              </div>
+            )}
+
             {error && <p className="text-sm text-red-500">{error}</p>}
             <Button className="w-full" onClick={save}>{isNew ? "Create User" : "Save Changes"}</Button>
           </div>

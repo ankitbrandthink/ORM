@@ -43,6 +43,18 @@ def create_refresh_token(sub: str, tenant_id: str) -> str:
     )
 
 
+def create_password_reset_token(user_id: str) -> str:
+    return _create_token({"sub": user_id}, timedelta(hours=1), "password_reset")
+
+
+def verify_password_reset_token(token: str) -> str | None:
+    """Returns user_id if valid reset token, else None."""
+    payload = decode_token(token)
+    if payload and payload.get("type") == "password_reset":
+        return payload.get("sub")
+    return None
+
+
 def decode_token(token: str) -> dict | None:
     try:
         return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])

@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -17,8 +18,9 @@ from app.schemas import LoginRequest, TokenResponse, RefreshRequest, RegisterReq
 from app.security import (
     create_access_token, create_refresh_token, decode_token,
     hash_password, verify_password,
+    create_password_reset_token, verify_password_reset_token,
 )
-from app.utils.email import send_welcome_email
+from app.utils.email import send_welcome_email, send_password_reset_email
 
 router = APIRouter()
 log = logging.getLogger("orm.auth")
@@ -340,3 +342,73 @@ def register(
     db.commit()
     return UserOut(id=user.id, email=user.email, full_name=user.full_name,
                    is_active=user.is_active, roles=body.roles)
+
+
+# ── Password reset (public) ───────────────────────────────────────────────────
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+@router.post("/forgot-password")
+def forgot_password(body: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
+    """Send a password-reset link to the given email. Always returns 200 to avoid user enumeration."""
+    email = body.email.strip().lower()
+    user = db.query(User).filter(User.email == email, User.is_deleted == False, User.is_active == True).first()
+    if user:
+        token = create_password_reset_token(str(user.id))
+        # Detect origin from request for the reset link
+        origin = request.headers.get("Origin") or request.headers.get("Referer", "").rstrip("/")
+        if not origin:
+            origin = "https://orm.itechexpand.com"
+        reset_link = f"{origin}/reset-password?token={token}"
+        sent = send_password_reset_email(user.email, user.full_name or user.email, reset_link)
+        if not sent:
+            log.info("[reset] Reset link for %s: %s", email, reset_link)
+    return {"message": "If that email is registered, a reset link has been sent."}
+
+
+@router.post("/reset-password")
+def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """Validate reset token and set the new password."""
+    user_id = verify_password_reset_token(body.token)
+    if not user_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired reset link. Please request a new one.")
+    if len(body.new_password) < 8:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Password must be at least 8 characters.")
+    user = db.query(User).filter(User.id == user_id, User.is_deleted == False).first()
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
+    user.hashed_password = hash_password(body.new_password)
+    db.commit()
+    return {"message": "Password updated successfully. You can now sign in."}
+
+
+# ── Admin: send reset link to any user ───────────────────────────────────────
+
+@router.post("/send-reset-link/{user_id}")
+def admin_send_reset_link(
+    user_id: str,
+    request: Request,
+    current: CurrentUser = Depends(require_roles("SuperAdmin", "CROManager")),
+    db: Session = Depends(get_db),
+):
+    """Admin: generate and email a password-reset link for any user."""
+    user = db.query(User).filter(
+        User.id == user_id,
+        User.tenant_id == current.tenant_id,
+        User.is_deleted == False,
+    ).first()
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
+    token = create_password_reset_token(str(user.id))
+    origin = request.headers.get("Origin") or "https://orm.itechexpand.com"
+    reset_link = f"{origin}/reset-password?token={token}"
+    sent = send_password_reset_email(user.email, user.full_name or user.email, reset_link)
+    if not sent:
+        log.info("[reset] Admin-generated reset link for %s: %s", user.email, reset_link)
+    return {"message": f"Reset link sent to {user.email}.", "email_sent": sent}

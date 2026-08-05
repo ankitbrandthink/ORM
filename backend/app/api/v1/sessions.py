@@ -17,10 +17,17 @@ log = logging.getLogger("orm.sessions")
 
 
 def _fmt(dt) -> Optional[str]:
+    """Return ISO-8601 string with explicit UTC suffix so JS Date() parses correctly."""
     if dt is None:
         return None
     if isinstance(dt, str):
+        # Backfill Z if no timezone marker present (all DB timestamps are UTC)
+        if dt and "+" not in dt[10:] and not dt.endswith("Z"):
+            return dt + "Z"
         return dt
+    # Naive datetime — stored as UTC, add Z
+    if dt.tzinfo is None:
+        return dt.isoformat() + "Z"
     return dt.isoformat()
 
 

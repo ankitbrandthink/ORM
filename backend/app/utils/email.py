@@ -37,6 +37,41 @@ def send_email(to: str, subject: str, html_body: str) -> bool:
         return False
 
 
+def send_password_reset_email(to: str, full_name: str, reset_link: str) -> bool:
+    subject = "ORM CMS — Reset Your Password"
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;">
+      <div style="background:#1e293b;padding:24px;border-radius:12px;margin-bottom:24px;">
+        <h1 style="color:#fff;margin:0;font-size:20px;">ORM CMS</h1>
+        <p style="color:#94a3b8;margin:8px 0 0;font-size:13px;">by BrandThink Agency</p>
+      </div>
+      <p style="color:#334155;font-size:15px;">Hi {full_name or to},</p>
+      <p style="color:#334155;font-size:14px;">
+        We received a request to reset your password. Click the button below to choose a new one.
+        This link expires in <strong>1 hour</strong>.
+      </p>
+      <div style="text-align:center;margin:32px 0;">
+        <a href="{reset_link}"
+           style="background:#2563eb;color:#fff;text-decoration:none;padding:14px 32px;border-radius:10px;font-size:15px;font-weight:bold;display:inline-block;">
+          Reset My Password
+        </a>
+      </div>
+      <p style="color:#64748b;font-size:13px;">
+        Or copy this link into your browser:<br/>
+        <a href="{reset_link}" style="color:#2563eb;word-break:break-all;">{reset_link}</a>
+      </p>
+      <p style="color:#94a3b8;font-size:12px;">
+        If you did not request a password reset, you can safely ignore this email.
+        Your password will not change.
+      </p>
+      <p style="color:#94a3b8;font-size:12px;margin-top:32px;border-top:1px solid #e2e8f0;padding-top:16px;">
+        This email was sent by ORM CMS · BrandThink Agency. Do not reply to this email.
+      </p>
+    </div>
+    """
+    return send_email(to, subject, html)
+
+
 def send_welcome_email(to: str, full_name: str, password: str) -> bool:
     subject = "Welcome to ORM CMS — Your Account Details"
     html = f"""
