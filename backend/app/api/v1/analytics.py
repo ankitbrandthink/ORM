@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 from app.ai.bot_detector import bot_score, authenticity_label
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func
+from sqlalchemy import func, text as _sql
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -96,16 +96,31 @@ def _apply_client_filter(q, client_id: str | None, db: Session | None = None):
 def sentiment_overview(current: CurrentUser = Depends(get_current_user),
                        db: Session = Depends(get_db),
                        client_id: str | None = None):
-    q = (db.query(CommentAnalysis.sentiment, func.count())
-         .join(Comment, Comment.id == CommentAnalysis.comment_id)
-         .filter(CommentAnalysis.tenant_id == current.tenant_id))
     if client_id:
-        q = q.join(Post, Post.id == Comment.post_id).filter(
-            Post.is_deleted == False,
-            _client_post_filter(db, client_id),
-        )
-    rows = q.group_by(CommentAnalysis.sentiment).all()
-    data = {s or "Unknown": c for s, c in rows}
+        rows = db.execute(_sql("""
+            WITH cp AS (
+                SELECT p.id AS post_id
+                FROM posts p
+                WHERE p.is_deleted = 0 AND p.client_id = :cid
+                UNION ALL
+                SELECT p.id
+                FROM posts p
+                JOIN social_profiles sp ON sp.id = p.social_profile_id
+                WHERE p.is_deleted = 0 AND p.client_id IS NULL AND sp.client_id = :cid
+            )
+            SELECT ca.sentiment, COUNT(*) AS cnt
+            FROM cp
+            JOIN comments c ON c.post_id = cp.post_id
+            JOIN comment_analysis ca ON ca.comment_id = c.id
+            WHERE ca.is_deleted = 0
+            GROUP BY ca.sentiment
+        """), {"cid": client_id}).fetchall()
+    else:
+        rows = (db.query(CommentAnalysis.sentiment, func.count())
+                .join(Comment, Comment.id == CommentAnalysis.comment_id)
+                .filter(CommentAnalysis.tenant_id == current.tenant_id)
+                .group_by(CommentAnalysis.sentiment).all())
+    data = {(row[0] or "Unknown"): row[1] for row in rows}
     total = sum(data.values()) or 1
     return {
         "counts": data,
@@ -118,16 +133,32 @@ def sentiment_overview(current: CurrentUser = Depends(get_current_user),
 def emotion_breakdown(current: CurrentUser = Depends(get_current_user),
                       db: Session = Depends(get_db),
                       client_id: str | None = None):
-    q = (db.query(CommentAnalysis.emotion)
-         .join(Comment, Comment.id == CommentAnalysis.comment_id)
-         .filter(CommentAnalysis.tenant_id == current.tenant_id))
     if client_id:
-        q = q.join(Post, Post.id == Comment.post_id).filter(
-            Post.is_deleted == False,
-            _client_post_filter(db, client_id),
-        )
+        rows = db.execute(_sql("""
+            WITH cp AS (
+                SELECT p.id AS post_id
+                FROM posts p
+                WHERE p.is_deleted = 0 AND p.client_id = :cid
+                UNION ALL
+                SELECT p.id
+                FROM posts p
+                JOIN social_profiles sp ON sp.id = p.social_profile_id
+                WHERE p.is_deleted = 0 AND p.client_id IS NULL AND sp.client_id = :cid
+            )
+            SELECT ca.emotion
+            FROM cp
+            JOIN comments c ON c.post_id = cp.post_id
+            JOIN comment_analysis ca ON ca.comment_id = c.id
+            WHERE ca.is_deleted = 0
+            LIMIT 100000
+        """), {"cid": client_id}).fetchall()
+    else:
+        rows = (db.query(CommentAnalysis.emotion)
+                .join(Comment, Comment.id == CommentAnalysis.comment_id)
+                .filter(CommentAnalysis.tenant_id == current.tenant_id)
+                .limit(100000).all())
     counter: Counter = Counter()
-    for (emotions,) in q.all():
+    for (emotions,) in rows:
         for e in (emotions or []):
             counter[e] += 1
     return {"emotions": dict(counter)}
@@ -139,14 +170,43 @@ def trend(current: CurrentUser = Depends(get_current_user), db: Session = Depend
           client_id: str | None = None):
     """Sentiment trend — daily comment counts, strictly scoped to the requested client."""
     from app.api.v1.posts import _parse_dt_from, _parse_dt_to
+    if client_id:
+        date_clause = ""
+        params: dict = {"cid": client_id}
+        if date_from:
+            date_clause += " AND c.published_at >= :date_from"
+            params["date_from"] = _parse_dt_from(date_from)
+        if date_to:
+            date_clause += " AND c.published_at <= :date_to"
+            params["date_to"] = _parse_dt_to(date_to)
+        rows = db.execute(_sql(f"""
+            WITH cp AS (
+                SELECT p.id AS post_id
+                FROM posts p
+                WHERE p.is_deleted = 0 AND p.client_id = :cid
+                UNION ALL
+                SELECT p.id
+                FROM posts p
+                JOIN social_profiles sp ON sp.id = p.social_profile_id
+                WHERE p.is_deleted = 0 AND p.client_id IS NULL AND sp.client_id = :cid
+            )
+            SELECT DATE(c.published_at) AS pub_date, ca.sentiment, COUNT(*) AS cnt
+            FROM cp
+            JOIN comments c ON c.post_id = cp.post_id
+            JOIN comment_analysis ca ON ca.comment_id = c.id
+            WHERE ca.is_deleted = 0 {date_clause}
+            GROUP BY DATE(c.published_at), ca.sentiment
+            ORDER BY pub_date
+        """), params).fetchall()
+        by_date: dict = {}
+        for row in rows:
+            dk = str(row[0]) if row[0] else "unknown"
+            by_date.setdefault(dk, {"Positive": 0, "Negative": 0, "Neutral": 0})
+            by_date[dk][row[1] or "Neutral"] += row[2]
+        return {"trend": [{"date": k, **v} for k, v in sorted(by_date.items())]}
     q = (db.query(Comment.published_at, CommentAnalysis.sentiment, func.count())
          .join(CommentAnalysis, CommentAnalysis.comment_id == Comment.id)
          .filter(Comment.tenant_id == current.tenant_id))
-    if client_id:
-        q = q.join(Post, Post.id == Comment.post_id).filter(
-            Post.is_deleted == False,
-            _client_post_filter(db, client_id),
-        )
     if date_from:
         q = q.filter(Comment.published_at >= _parse_dt_from(date_from))
     if date_to:
@@ -1396,7 +1456,14 @@ def counter_narrative(
     if post_id:
         post_ids = [post_id]
     else:
-        post_ids = _client_post_ids(db, client_id)
+        post_ids = [r[0] for r in db.execute(_sql("""
+            SELECT p.id FROM posts p
+            WHERE p.is_deleted = 0 AND p.client_id = :cid
+            UNION ALL
+            SELECT p.id FROM posts p
+            JOIN social_profiles sp ON sp.id = p.social_profile_id
+            WHERE p.is_deleted = 0 AND p.client_id IS NULL AND sp.client_id = :cid
+        """), {"cid": client_id}).fetchall()]
 
     if not post_ids:
         return _empty_counter_narrative()
@@ -1724,21 +1791,32 @@ def narrative_briefing(
     Synthesises signals from comment sentiment, AI narratives, topic clusters,
     and press coverage into two actionable lists for the client's comms team.
     """
-    # 1. All post IDs for this client
-    all_post_ids = _client_post_ids(db, client_id)
-    if not all_post_ids:
-        return _empty_briefing(client_id)
-
-    # 2. Prefer recent data; fall back to all-time if thin
+    # 1. Recent post IDs via indexed UNION ALL (avoid Python-list IN clause)
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    recent_ids = [
-        r[0] for r in db.query(Post.id).filter(
-            Post.id.in_(all_post_ids),
-            Post.published_at >= cutoff,
-            Post.is_deleted == False,
-        ).all()
-    ]
-    work_ids = recent_ids if len(recent_ids) >= 3 else all_post_ids
+    recent_ids = [r[0] for r in db.execute(_sql("""
+        SELECT p.id FROM posts p
+        WHERE p.is_deleted = 0 AND p.client_id = :cid AND p.published_at >= :cutoff
+        UNION ALL
+        SELECT p.id FROM posts p
+        JOIN social_profiles sp ON sp.id = p.social_profile_id
+        WHERE p.is_deleted = 0 AND p.client_id IS NULL AND sp.client_id = :cid
+          AND p.published_at >= :cutoff
+    """), {"cid": client_id, "cutoff": cutoff}).fetchall()]
+
+    if len(recent_ids) >= 3:
+        work_ids = recent_ids
+    else:
+        all_post_ids = [r[0] for r in db.execute(_sql("""
+            SELECT p.id FROM posts p
+            WHERE p.is_deleted = 0 AND p.client_id = :cid
+            UNION ALL
+            SELECT p.id FROM posts p
+            JOIN social_profiles sp ON sp.id = p.social_profile_id
+            WHERE p.is_deleted = 0 AND p.client_id IS NULL AND sp.client_id = :cid
+        """), {"cid": client_id}).fetchall()]
+        if not all_post_ids:
+            return _empty_briefing(client_id)
+        work_ids = all_post_ids
 
     # 3. Positive comment corpus
     pos_rows = (
