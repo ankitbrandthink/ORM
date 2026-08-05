@@ -21,14 +21,14 @@ const PAGE_SIZE = 10;
 
 // ── Time presets ─────────────────────────────────────────────────────────────
 const PRESETS = [
-  { key: "daily",   label: "Daily",   gran: "daily" as const, days: 1  },
-  { key: "weekly",  label: "Weekly",  gran: "daily" as const, days: 7  },
-  { key: "monthly", label: "Monthly", gran: "daily" as const, days: 30 },
+  { key: "daily",   label: "Daily",   gran: "daily" as const, days: 7  },
+  { key: "weekly",  label: "Weekly",  gran: "daily" as const, days: 30 },
+  { key: "monthly", label: "Monthly", gran: "daily" as const, days: 90 },
 ] as const;
 type PresetKey = typeof PRESETS[number]["key"];
 
 const DEFAULT_PRESET: PresetKey = "monthly";
-const DEFAULT_DAYS = 30;
+const DEFAULT_DAYS = 90;
 
 function get90dWindow() {
   const to = new Date();
@@ -519,10 +519,13 @@ export default function ListeningPage() {
     }).catch(() => {}).finally(() => setLoadingMore(false));
   }, [profileId, currentPage, loadingMore, df]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // When profile changes, load posts defaulting to last 90 days
+  // When profile changes, reload posts using the currently-active time preset
+  // so the list always reflects whatever filter the user selected
   useEffect(() => {
     setUrlSearch("");
-    loadPosts(profileId, undefined, "");
+    const preset = PRESETS.find((p) => p.key === activePreset) ?? PRESETS[2];
+    const { from, to } = presetWindow(preset);
+    loadPosts(profileId, { date_from: from, date_to: to }, "");
   }, [profileId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync chart to the top-level client selection
@@ -809,9 +812,9 @@ export default function ListeningPage() {
               <span className="font-medium">Neutral</span>, or{" "}
               <span className="font-medium text-red-600 dark:text-red-400">Negative</span>{" "}
               based on tone, word choice, and context (not just keywords).
-              {activePreset === "daily"   && " Daily view: today's comments only."}
-              {activePreset === "weekly"  && " Weekly view: last 7 days, one bar per day."}
-              {activePreset === "monthly" && " Monthly view: last 30 days, one bar per day."}
+              {activePreset === "daily"   && " Daily view: last 7 days, one bar per day."}
+              {activePreset === "weekly"  && " Weekly view: last 30 days, one bar per day."}
+              {activePreset === "monthly" && " Monthly view: last 90 days, one bar per day."}
               {" "}The dashed line shows total volume trend. Risk is High when negative comments exceed 40%.
             </p>
           </div>

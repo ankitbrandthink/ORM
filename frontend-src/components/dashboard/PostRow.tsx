@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import { ExternalLink, Trash2, Sparkles, RefreshCw } from "lucide-react";
+import { ExternalLink, Trash2, Sparkles, RefreshCw, MessageSquare, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 import { Card } from "@/components/ui/primitives";
 import { api } from "@/lib/api";
 import {
@@ -57,6 +57,36 @@ export function PostRow({ post, sentiment, dateLabel, onDelete }: PostRowProps) 
   // AI Narrative state
   const [narrative, setNarrative] = useState<string | null>(post?.ai_narrative ?? null);
   const [narrativeLoading, setNarrativeLoading] = useState(false);
+
+  // Top comments state
+  const [showComments, setShowComments] = useState(false);
+  const [topComments, setTopComments] = useState<any[] | null>(null);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+
+  async function loadTopComments() {
+    if (topComments !== null) {
+      setShowComments((v) => !v);
+      return;
+    }
+    setShowComments(true);
+    setCommentsLoading(true);
+    try {
+      const { data } = await api.get("/comments", {
+        params: { post_id: post.id, page_size: 20 },
+      });
+      const all: any[] = data.items || [];
+      // Pick most relevant: up to 3 negative, 2 positive, 1 neutral for a balanced view
+      const neg = all.filter((c) => c.sentiment === "Negative").slice(0, 3);
+      const pos = all.filter((c) => c.sentiment === "Positive").slice(0, 2);
+      const neu = all.filter((c) => c.sentiment === "Neutral").slice(0, 1);
+      const selected = [...neg, ...pos, ...neu];
+      setTopComments(selected.length > 0 ? selected : all.slice(0, 5));
+    } catch {
+      setTopComments([]);
+    } finally {
+      setCommentsLoading(false);
+    }
+  }
 
   async function generateNarrative(regenerate = false) {
     setNarrativeLoading(true);
@@ -211,6 +241,73 @@ export function PostRow({ post, sentiment, dateLabel, onDelete }: PostRowProps) 
             )}
           </div>
         </div>
+      </div>
+
+      {/* ── Top Comments section ── */}
+      <div className="border-t border-border px-4 py-3">
+        <button
+          onClick={loadTopComments}
+          className="flex items-center gap-2 text-xs font-medium text-muted hover:text-fg transition-colors"
+        >
+          <MessageSquare className="h-3.5 w-3.5" />
+          {showComments ? "Hide" : "Top comments"}
+          {total > 0 && (
+            <span className="rounded-full bg-border px-1.5 py-0.5 text-[10px] font-semibold">
+              {total}
+            </span>
+          )}
+          {commentsLoading
+            ? <Loader2 className="h-3 w-3 animate-spin" />
+            : showComments
+            ? <ChevronUp className="h-3 w-3" />
+            : <ChevronDown className="h-3 w-3" />}
+        </button>
+
+        {showComments && topComments && topComments.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {topComments.map((c, i) => (
+              <div key={c.id || i} className="flex gap-2 rounded-lg bg-black/[0.02] dark:bg-white/[0.02] p-2.5">
+                <div className={`mt-1 h-2 w-2 shrink-0 rounded-full ${
+                  c.sentiment === "Positive" ? "bg-green-500" :
+                  c.sentiment === "Negative" ? "bg-red-500" :
+                  "bg-gray-400"
+                }`} />
+                <div className="min-w-0 flex-1">
+                  <div className="mb-0.5 flex flex-wrap items-center gap-1.5">
+                    {c.author && (
+                      <span className="text-[10px] font-medium text-muted">{c.author}</span>
+                    )}
+                    <span className={`rounded px-1 py-0.5 text-[10px] font-semibold ${
+                      c.sentiment === "Positive"
+                        ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                        : c.sentiment === "Negative"
+                        ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                        : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+                    }`}>
+                      {c.sentiment || "Unknown"}
+                    </span>
+                    {c.toxicity_score > 0.4 && (
+                      <span className="rounded px-1 py-0.5 text-[10px] font-semibold bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">
+                        Toxic {Math.round(c.toxicity_score * 100)}%
+                      </span>
+                    )}
+                  </div>
+                  <p className="line-clamp-2 text-xs leading-relaxed text-fg">{c.content}</p>
+                </div>
+              </div>
+            ))}
+            <Link
+              href={`/listening/${post.id}`}
+              className="mt-1 inline-block text-[11px] text-accent hover:underline"
+            >
+              View all {total} comments →
+            </Link>
+          </div>
+        )}
+
+        {showComments && topComments && topComments.length === 0 && (
+          <p className="mt-2 text-xs text-muted">No comments found for this post.</p>
+        )}
       </div>
 
       {/* Bottom CTA */}
