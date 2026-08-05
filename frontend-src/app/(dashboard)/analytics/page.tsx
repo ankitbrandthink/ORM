@@ -438,8 +438,8 @@ export default function AnalyticsPage() {
           ) : (
             <div className="flex flex-wrap gap-1.5">
               {showPosKeywords.map((kw: any, i: number) => (
-                <KeywordPill key={kw.keyword || kw.word || kw || i}
-                  word={kw.keyword || kw.word || kw}
+                <KeywordPill key={kw.keyword || kw.word || kw.against || i}
+                  word={kw.keyword || kw.word || kw.against || String(i)}
                   count={kw.frequency || kw.count}
                   variant="positive" />
               ))}
@@ -461,8 +461,8 @@ export default function AnalyticsPage() {
           ) : (
             <div className="flex flex-wrap gap-1.5">
               {showNegKeywords.map((kw: any, i: number) => (
-                <KeywordPill key={kw.keyword || kw.word || kw || i}
-                  word={kw.keyword || kw.word || kw}
+                <KeywordPill key={kw.keyword || kw.word || kw.against || i}
+                  word={kw.keyword || kw.word || kw.against || String(i)}
                   count={kw.frequency || kw.count}
                   variant="negative" />
               ))}
