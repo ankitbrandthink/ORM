@@ -71,6 +71,17 @@ def _client_post_filter(db: Session, client_id: str):
     )
 
 
+def _client_post_ids(db: Session, client_id: str) -> list:
+    """Return a list of Post IDs for a client (direct ownership + via social profiles)."""
+    from sqlalchemy import or_
+    profile_subq = db.query(SocialProfile.id).filter(SocialProfile.client_id == client_id)
+    rows = db.query(Post.id).filter(
+        Post.is_deleted == False,
+        or_(Post.client_id == client_id, Post.social_profile_id.in_(profile_subq)),
+    ).all()
+    return [r for (r,) in rows]
+
+
 def _apply_client_filter(q, client_id: str | None, db: Session | None = None):
     """Filter by client_id using both direct Post.client_id and social-profile path."""
     if not client_id or db is None:
