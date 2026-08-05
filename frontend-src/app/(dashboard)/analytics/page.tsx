@@ -8,7 +8,8 @@ import {
   MessageSquare, TrendingUp, TrendingDown, Minus, AlertTriangle,
   Hash, Zap, Eye, Brain, Loader2, CheckCircle2,
   Globe, Target, ShieldAlert, FileBarChart2, Bell, ArrowRight,
-  ThumbsUp, ThumbsDown, Lightbulb, BookOpen,
+  ThumbsUp, ThumbsDown, Lightbulb, BookOpen, Users, MessageCircle,
+  Activity, Star, XCircle, Languages,
 } from "lucide-react";
 
 const WORD_COLORS = [
@@ -59,19 +60,51 @@ function KeywordPill({ word, count, variant }: { word: string; count?: number; v
   );
 }
 
+function getLanguageStrategy(lang: string, pct: number): { response: string; tone: string; tip: string } {
+  const strategies: Record<string, { response: string; tone: string; tip: string }> = {
+    hi: { response: "हिंदी में जवाब दें", tone: "Conversational & warm", tip: "Use simple Hindi, avoid jargon. Reference local values and achievements." },
+    hindi: { response: "हिंदी में जवाब दें", tone: "Conversational & warm", tip: "Use simple Hindi, avoid jargon. Reference local values and achievements." },
+    en: { response: "Respond in English", tone: "Formal & concise", tip: "Use professional tone. Cite facts and data to counter criticism." },
+    english: { response: "Respond in English", tone: "Formal & concise", tip: "Use professional tone. Cite facts and data to counter criticism." },
+    ur: { response: "اردو میں جواب دیں", tone: "Respectful & empathetic", tip: "Use respectful greetings. Acknowledge concerns before responding." },
+    urdu: { response: "اردو میں جواب دیں", tone: "Respectful & empathetic", tip: "Use respectful greetings. Acknowledge concerns before responding." },
+    mr: { response: "मराठीत उत्तर द्या", tone: "Community-focused", tip: "Reference local Maharashtra context and development." },
+    marathi: { response: "मराठीत उत्तर द्या", tone: "Community-focused", tip: "Reference local Maharashtra context and development." },
+    bn: { response: "বাংলায় উত্তর দিন", tone: "Cultural & respectful", tip: "Reference Bengali culture and regional identity." },
+    bengali: { response: "বাংলায় উত্তর দিন", tone: "Cultural & respectful", tip: "Reference Bengali culture and regional identity." },
+    ta: { response: "தமிழில் பதில் சொல்லுங்கள்", tone: "Pride-based messaging", tip: "Reference Tamil pride and regional achievements." },
+    tamil: { response: "தமிழில் பதில் சொல்லுங்கள்", tone: "Pride-based messaging", tip: "Reference Tamil pride and regional achievements." },
+    te: { response: "తెలుగులో సమాధానం ఇవ్వండి", tone: "Community & development", tip: "Focus on local development and progress." },
+    telugu: { response: "తెలుగులో సమాధానం ఇవ్వండి", tone: "Community & development", tip: "Focus on local development and progress." },
+    gu: { response: "ગુજરાતીમાં જવાબ આપો", tone: "Business-friendly & positive", tip: "Reference economic growth and development achievements." },
+    gujarati: { response: "ગુજરાતીમાં જવાબ આપો", tone: "Business-friendly & positive", tip: "Reference economic growth and development achievements." },
+    pa: { response: "ਪੰਜਾਬੀ ਵਿੱਚ ਜਵਾਬ ਦਿਓ", tone: "Direct & confident", tip: "Use direct language. Reference agricultural and regional achievements." },
+    punjabi: { response: "ਪੰਜਾਬੀ ਵਿੱਚ ਜਵਾਬ ਦਿਓ", tone: "Direct & confident", tip: "Use direct language. Reference agricultural and regional achievements." },
+  };
+  const found = strategies[lang.toLowerCase()];
+  if (found) return found;
+  return {
+    response: `Respond in ${lang}`,
+    tone: "Localized & respectful",
+    tip: `${pct}% of your audience uses ${lang} — native-language responses significantly increase trust and engagement.`,
+  };
+}
+
 export default function AnalyticsPage() {
-  const [clients, setClients]             = useState<any[]>([]);
-  const [clientId, setClientId]           = useState<string>("");
-  const [sentiment, setSentiment]         = useState<any>({ counts: {} });
-  const [emotion, setEmotion]             = useState<any>({ emotions: {} });
-  const [trend, setTrend]                 = useState<any[]>([]);
-  const [words, setWords]                 = useState<any[]>([]);
-  const [topics, setTopics]               = useState<any[]>([]);
-  const [counterNarrative, setCN]         = useState<any>(null);
-  const [pressInsights, setPressInsights] = useState<any>(null);
-  const [loading, setLoading]             = useState(false);
-  const [training, setTraining]           = useState<any>({ status: "idle", progress: 0, stats: {} });
-  const [trainBusy, setTrainBusy]         = useState(false);
+  const [clients, setClients]               = useState<any[]>([]);
+  const [clientId, setClientId]             = useState<string>("");
+  const [sentiment, setSentiment]           = useState<any>({ counts: {} });
+  const [emotion, setEmotion]               = useState<any>({ emotions: {} });
+  const [trend, setTrend]                   = useState<any[]>([]);
+  const [words, setWords]                   = useState<any[]>([]);
+  const [topics, setTopics]                 = useState<any[]>([]);
+  const [counterNarrative, setCN]           = useState<any>(null);
+  const [pressInsights, setPressInsights]   = useState<any>(null);
+  const [commentNarrative, setCommentNar]   = useState<any>(null);
+  const [narrativeBriefing, setNarBriefing] = useState<any>(null);
+  const [loading, setLoading]               = useState(false);
+  const [training, setTraining]             = useState<any>({ status: "idle", progress: 0, stats: {} });
+  const [trainBusy, setTrainBusy]           = useState(false);
 
   useEffect(() => {
     api.get("/clients").then((r) => {
@@ -92,22 +125,28 @@ export default function AnalyticsPage() {
     setTopics([]);
     setCN(null);
     setPressInsights(null);
+    setCommentNar(null);
+    setNarBriefing(null);
     Promise.allSettled([
-      api.get("/analytics/sentiment-overview", { params: p }),
-      api.get("/analytics/emotion-breakdown",  { params: p }),
-      api.get("/analytics/trend",              { params: p }),
-      api.get("/analytics/word-frequency",     { params: p }),
-      api.get("/analytics/topic-clusters",     { params: p }),
-      api.get("/analytics/counter-narrative",  { params: p }),
-      api.get("/analytics/press-insights",     { params: p }),
-    ]).then(([s, e, t, w, tc, cn, pi]) => {
-      if (s.status === "fulfilled") setSentiment(s.value.data);
-      if (e.status === "fulfilled") setEmotion(e.value.data);
-      if (t.status === "fulfilled") setTrend(t.value.data?.trend || []);
-      if (w.status === "fulfilled") setWords(w.value.data?.words || []);
-      if (tc.status === "fulfilled") setTopics(tc.value.data?.clusters || []);
-      if (cn.status === "fulfilled") setCN(cn.value.data);
-      if (pi.status === "fulfilled") setPressInsights(pi.value.data);
+      api.get("/analytics/sentiment-overview",  { params: p }),
+      api.get("/analytics/emotion-breakdown",   { params: p }),
+      api.get("/analytics/trend",               { params: p }),
+      api.get("/analytics/word-frequency",      { params: p }),
+      api.get("/analytics/topic-clusters",      { params: p }),
+      api.get("/analytics/counter-narrative",   { params: p }),
+      api.get("/analytics/press-insights",      { params: p }),
+      api.get("/analytics/comment-narrative",   { params: p }),
+      api.get("/analytics/narrative-briefing",  { params: p }),
+    ]).then(([s, e, t, w, tc, cn, pi, comNar, narBrf]) => {
+      if (s.status === "fulfilled")      setSentiment(s.value.data);
+      if (e.status === "fulfilled")      setEmotion(e.value.data);
+      if (t.status === "fulfilled")      setTrend(t.value.data?.trend || []);
+      if (w.status === "fulfilled")      setWords(w.value.data?.words || []);
+      if (tc.status === "fulfilled")     setTopics(tc.value.data?.clusters || []);
+      if (cn.status === "fulfilled")     setCN(cn.value.data);
+      if (pi.status === "fulfilled")     setPressInsights(pi.value.data);
+      if (comNar.status === "fulfilled") setCommentNar(comNar.value.data);
+      if (narBrf.status === "fulfilled") setNarBriefing(narBrf.value.data);
     }).finally(() => setLoading(false));
   }, [clientId]);
 
@@ -155,24 +194,46 @@ export default function AnalyticsPage() {
   const crisisColor = negPct >= 50 ? "text-rose-600" : negPct >= 30 ? "text-amber-500" : "text-emerald-600";
 
   // Counter-narrative data
-  const ampKeywords: any[]     = counterNarrative?.amplification_keywords || [];
-  const counterKeywords: any[] = counterNarrative?.counter_keywords || [];
-  const negClusters: any[]     = counterNarrative?.negative_clusters || [];
-  const commentTemplates: any[]= counterNarrative?.comment_templates || [];
-  const contentAngles: any[]   = counterNarrative?.content_angles || [];
-  const overallStrategy: string= counterNarrative?.overall_strategy || "";
-  const cnUrgency: string      = counterNarrative?.urgency || "STABLE";
+  const ampKeywords: any[]      = counterNarrative?.amplification_keywords || [];
+  const counterKeywords: any[]  = counterNarrative?.counter_keywords || [];
+  const negClusters: any[]      = counterNarrative?.negative_clusters || [];
+  const commentTemplates: any[] = counterNarrative?.comment_templates || [];
+  const contentAngles: any[]    = counterNarrative?.content_angles || [];
+  const overallStrategy: string = counterNarrative?.overall_strategy || "";
+  const cnUrgency: string       = counterNarrative?.urgency || "STABLE";
+
+  // Comment narrative data (from /comment-narrative)
+  const posKeywords: string[]  = commentNarrative?.positive_keywords || [];
+  const negKeywords: string[]  = commentNarrative?.negative_keywords || [];
+  const posSummary: string     = commentNarrative?.positive_summary || "";
+  const negSummary: string     = commentNarrative?.negative_summary || "";
+  const posSamples: string[]   = commentNarrative?.positive_samples || [];
+  const negSamples: string[]   = commentNarrative?.negative_samples || [];
+
+  // Narrative briefing data (from /narrative-briefing)
+  const healthScore: number   = narrativeBriefing?.health_score || 0;
+  const healthStatus: string  = narrativeBriefing?.health || "stable";
+  const addressThese: any[]   = narrativeBriefing?.address_these || [];
+  const avoidThese: any[]     = narrativeBriefing?.avoid_these || [];
+
+  // Use comment_narrative keywords as primary fallback for positive/negative
+  const showPosKeywords = ampKeywords.length > 0 ? ampKeywords : posKeywords.map((k) => ({ keyword: k }));
+  const showNegKeywords = counterKeywords.length > 0 ? counterKeywords : negKeywords.map((k) => ({ keyword: k }));
 
   // Language breakdown
   const commentLangs: Record<string, number> = pressInsights?.comment_languages || {};
   const totalLangCount = Object.values(commentLangs).reduce((a, b) => a + b, 0);
-  const sortedLangs = Object.entries(commentLangs)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 10);
+  const sortedLangs = Object.entries(commentLangs).sort(([, a], [, b]) => b - a).slice(0, 10);
 
   const urgencyColor = cnUrgency.includes("CRISIS") ? "border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300"
     : cnUrgency.includes("MONITOR") ? "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
     : "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300";
+
+  const healthColor = healthStatus === "crisis"
+    ? { text: "text-rose-700 dark:text-rose-300", bg: "bg-rose-50 dark:bg-rose-900/20", border: "border-rose-200 dark:border-rose-700", bar: "bg-rose-500" }
+    : healthStatus === "caution"
+    ? { text: "text-amber-700 dark:text-amber-300", bg: "bg-amber-50 dark:bg-amber-900/20", border: "border-amber-200 dark:border-amber-700", bar: "bg-amber-500" }
+    : { text: "text-emerald-700 dark:text-emerald-300", bg: "bg-emerald-50 dark:bg-emerald-900/20", border: "border-emerald-200 dark:border-emerald-700", bar: "bg-emerald-500" };
 
   return (
     <div className="space-y-6">
@@ -260,6 +321,69 @@ export default function AnalyticsPage() {
         )}
       </div>
 
+      {/* ── Sentiment Intelligence Brief ── */}
+      {(posSummary || negSummary || posSamples.length > 0 || negSamples.length > 0) && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {/* Positive Brief */}
+          <Card className="border-l-4 border-l-emerald-500">
+            <div className="mb-2 flex items-center gap-2">
+              <ThumbsUp className="h-4 w-4 text-emerald-600" />
+              <h3 className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">Positive Sentiment Analysis</h3>
+              <span className="ml-auto rounded-full bg-emerald-100 dark:bg-emerald-900/30 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
+                {posPct}% positive
+              </span>
+            </div>
+            {posSummary ? (
+              <p className="mb-3 text-sm leading-relaxed text-fg">{posSummary}</p>
+            ) : (
+              <p className="mb-3 text-sm text-muted">Positive engagement signals from the audience.</p>
+            )}
+            {posSamples.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  <MessageCircle className="h-3 w-3" /> Sample Positive Comments
+                </div>
+                {posSamples.slice(0, 3).map((s: string, i: number) => (
+                  <div key={i} className="flex gap-2 rounded-lg bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/30 p-2.5">
+                    <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+                    <span className="text-xs leading-relaxed text-fg line-clamp-2">{s}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          {/* Negative Brief */}
+          <Card className="border-l-4 border-l-rose-500">
+            <div className="mb-2 flex items-center gap-2">
+              <ThumbsDown className="h-4 w-4 text-rose-600" />
+              <h3 className="text-sm font-semibold text-rose-700 dark:text-rose-400">Negative Sentiment Analysis</h3>
+              <span className="ml-auto rounded-full bg-rose-100 dark:bg-rose-900/30 px-2 py-0.5 text-[10px] font-semibold text-rose-700 dark:text-rose-400">
+                {negPct}% negative
+              </span>
+            </div>
+            {negSummary ? (
+              <p className="mb-3 text-sm leading-relaxed text-fg">{negSummary}</p>
+            ) : (
+              <p className="mb-3 text-sm text-muted">Monitoring criticism and negative narratives for counter-strategy.</p>
+            )}
+            {negSamples.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  <MessageCircle className="h-3 w-3" /> Sample Critical Comments
+                </div>
+                {negSamples.slice(0, 3).map((s: string, i: number) => (
+                  <div key={i} className="flex gap-2 rounded-lg bg-rose-50 dark:bg-rose-900/10 border border-rose-100 dark:border-rose-900/30 p-2.5">
+                    <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-rose-500" />
+                    <span className="text-xs leading-relaxed text-fg line-clamp-2">{s}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
       {/* Main charts */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <SentimentDonut data={sentiment.counts || {}} />
@@ -300,7 +424,7 @@ export default function AnalyticsPage() {
 
       {/* ── Positive & Negative Sentiment Keywords ── */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* Positive amplification keywords */}
+        {/* Positive keywords */}
         <Card>
           <div className="mb-1 flex items-center gap-2">
             <ThumbsUp className="h-4 w-4 text-emerald-600" />
@@ -309,12 +433,12 @@ export default function AnalyticsPage() {
           <p className="mb-3 text-xs text-muted">
             Words driving supportive sentiment — amplify these in content to reinforce positive narrative.
           </p>
-          {ampKeywords.length === 0 ? (
-            <div className="text-sm text-muted">No positive keyword data yet. More comments needed.</div>
+          {showPosKeywords.length === 0 ? (
+            <div className="text-sm text-muted">No positive keyword data yet. Add comments to populate.</div>
           ) : (
             <div className="flex flex-wrap gap-1.5">
-              {ampKeywords.map((kw: any, i: number) => (
-                <KeywordPill key={kw.keyword || kw.word || i}
+              {showPosKeywords.map((kw: any, i: number) => (
+                <KeywordPill key={kw.keyword || kw.word || kw || i}
                   word={kw.keyword || kw.word || kw}
                   count={kw.frequency || kw.count}
                   variant="positive" />
@@ -332,12 +456,12 @@ export default function AnalyticsPage() {
           <p className="mb-3 text-xs text-muted">
             Words associated with criticism or negative sentiment — monitor and develop counter responses.
           </p>
-          {counterKeywords.length === 0 ? (
-            <div className="text-sm text-muted">No negative keyword data yet. More comments needed.</div>
+          {showNegKeywords.length === 0 ? (
+            <div className="text-sm text-muted">No negative keyword data yet. Add comments to populate.</div>
           ) : (
             <div className="flex flex-wrap gap-1.5">
-              {counterKeywords.map((kw: any, i: number) => (
-                <KeywordPill key={kw.keyword || kw.word || i}
+              {showNegKeywords.map((kw: any, i: number) => (
+                <KeywordPill key={kw.keyword || kw.word || kw || i}
                   word={kw.keyword || kw.word || kw}
                   count={kw.frequency || kw.count}
                   variant="negative" />
@@ -347,46 +471,144 @@ export default function AnalyticsPage() {
         </Card>
       </div>
 
-      {/* ── Comment Language Breakdown ── */}
-      {sortedLangs.length > 0 && (
-        <Card>
-          <div className="mb-1 flex items-center gap-2">
-            <Globe className="h-4 w-4 text-accent" />
-            <h3 className="text-sm font-semibold">Comment Language Breakdown</h3>
-          </div>
-          <p className="mb-3 text-xs text-muted">
-            Languages detected across analysed comments for {selClient?.name || "this account"}.
-            Tailor response language strategy to match your audience.
-          </p>
-          <div className="space-y-2">
-            {sortedLangs.map(([lang, count]) => {
-              const pct = totalLangCount > 0 ? Math.round(count * 100 / totalLangCount) : 0;
-              return (
-                <div key={lang}>
-                  <div className="mb-0.5 flex items-center justify-between text-xs">
-                    <span className="font-medium capitalize">{lang || "Unknown"}</span>
-                    <span className="tabular-nums text-muted">{count.toLocaleString()} comments ({pct}%)</span>
+      {/* ── Comment Language Analysis & ORM Language Strategy ── */}
+      <Card>
+        <div className="mb-1 flex items-center gap-2">
+          <Languages className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-semibold">Comment Language Analysis</h3>
+        </div>
+        <p className="mb-3 text-xs text-muted">
+          Languages detected across comments for <b>{selClient?.name || "this account"}</b> — use this to craft targeted, native-language ORM responses that maximise engagement and trust.
+        </p>
+        {sortedLangs.length === 0 ? (
+          <div className="text-sm text-muted">No language data yet. Language detection runs as comments are collected.</div>
+        ) : (
+          <>
+            {/* Language bars */}
+            <div className="space-y-2 mb-4">
+              {sortedLangs.map(([lang, count]) => {
+                const pct = totalLangCount > 0 ? Math.round(count * 100 / totalLangCount) : 0;
+                return (
+                  <div key={lang}>
+                    <div className="mb-0.5 flex items-center justify-between text-xs">
+                      <span className="font-medium capitalize">{lang || "Unknown"}</span>
+                      <span className="tabular-nums text-muted">{count.toLocaleString()} comments ({pct}%)</span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-border">
+                      <div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${pct}%` }} />
+                    </div>
                   </div>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-border">
-                    <div
-                      className="h-full rounded-full bg-accent transition-all duration-500"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {sortedLangs.length > 0 && (
-            <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-900/20 p-3 text-xs text-blue-700 dark:text-blue-300">
-              <span className="font-semibold">Strategy insight:</span>{" "}
-              {sortedLangs[0][0] === "en" || sortedLangs[0][0] === "english"
-                ? "Majority English audience — use formal, concise responses."
-                : sortedLangs[0][0] === "hi" || sortedLangs[0][0] === "hindi"
-                ? "Predominantly Hindi audience — respond in Hindi for higher engagement and relatability."
-                : `Dominant language is ${sortedLangs[0][0]} — consider native-language responses for better resonance.`}
+                );
+              })}
             </div>
-          )}
+
+            {/* Per-language ORM strategy guide */}
+            <div className="border-t border-border pt-4">
+              <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+                <Globe className="h-3.5 w-3.5" /> ORM Team Language Strategy Guide
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {sortedLangs.slice(0, 4).map(([lang, count]) => {
+                  const pct = totalLangCount > 0 ? Math.round(count * 100 / totalLangCount) : 0;
+                  const strat = getLanguageStrategy(lang, pct);
+                  const isTop = sortedLangs[0][0] === lang;
+                  return (
+                    <div key={lang} className={`rounded-xl border p-3 ${isTop
+                      ? "border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-900/20"
+                      : "border-border bg-card"}`}>
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className={`text-xs font-bold capitalize ${isTop ? "text-blue-700 dark:text-blue-300" : "text-fg"}`}>
+                          {lang} {isTop && "★ Primary"}
+                        </span>
+                        <span className="text-[10px] tabular-nums text-muted">{pct}% of audience</span>
+                      </div>
+                      <div className="space-y-0.5 text-[11px]">
+                        <div><span className="text-muted">Respond:</span> <span className="font-medium">{strat.response}</span></div>
+                        <div><span className="text-muted">Tone:</span> <span className="font-medium">{strat.tone}</span></div>
+                        <div className={`mt-1.5 rounded-lg p-2 text-[10px] leading-relaxed ${isTop ? "bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300" : "bg-black/5 dark:bg-white/5 text-muted"}`}>
+                          💡 {strat.tip}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Shift strategy tip */}
+              <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50 dark:border-violet-800 dark:bg-violet-900/20 p-3 text-xs text-violet-700 dark:text-violet-300">
+                <span className="font-semibold">Narrative Shift Strategy:</span>{" "}
+                {negPct >= 40
+                  ? `High negativity (${negPct}%) detected. Prioritise ${sortedLangs[0]?.[0] || "native"}-language positive counter-content on the same topics driving criticism.`
+                  : negPct >= 25
+                  ? `Moderate criticism at ${negPct}%. Focus ${sortedLangs[0]?.[0] || "native"} responses on achievements and addressing top complaint keywords.`
+                  : `Sentiment is healthy (${posPct}% positive). Reinforce with ${sortedLangs[0]?.[0] || "native"}-language content amplifying top positive keywords.`}
+              </div>
+            </div>
+          </>
+        )}
+      </Card>
+
+      {/* ── ORM Action Briefing (from narrative-briefing) ── */}
+      {(addressThese.length > 0 || avoidThese.length > 0 || healthScore > 0) && (
+        <Card className={`border-l-4 ${healthColor.border} border-l-${healthStatus === "crisis" ? "rose" : healthStatus === "caution" ? "amber" : "emerald"}-500`}>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Activity className="h-4 w-4 text-accent" />
+              <h3 className="text-sm font-semibold">ORM Action Briefing</h3>
+            </div>
+            {healthScore > 0 && (
+              <div className={`flex items-center gap-2 rounded-xl border px-3 py-1.5 ${healthColor.bg} ${healthColor.border}`}>
+                <span className={`text-xs font-bold ${healthColor.text} capitalize`}>
+                  {healthStatus} · {healthScore}/100
+                </span>
+                <div className="h-1.5 w-16 overflow-hidden rounded-full bg-black/10">
+                  <div className={`h-full rounded-full transition-all ${healthColor.bar}`} style={{ width: `${healthScore}%` }} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {/* Address these */}
+            {addressThese.length > 0 && (
+              <div>
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> Issues to Address Proactively
+                </div>
+                <div className="space-y-2">
+                  {addressThese.map((item: any, i: number) => {
+                    const text = typeof item === "string" ? item : item.topic || item.issue || item.narrative || JSON.stringify(item);
+                    return (
+                      <div key={i} className="flex gap-2 rounded-lg border border-emerald-100 dark:border-emerald-900/40 bg-emerald-50/50 dark:bg-emerald-900/10 p-2.5">
+                        <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0 text-emerald-600" />
+                        <span className="text-xs leading-relaxed">{text}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Avoid these */}
+            {avoidThese.length > 0 && (
+              <div>
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+                  <XCircle className="h-3.5 w-3.5 text-rose-500" /> What to Avoid
+                </div>
+                <div className="space-y-2">
+                  {avoidThese.map((item: any, i: number) => {
+                    const text = typeof item === "string" ? item : item.reason || item.source || item.narrative || JSON.stringify(item);
+                    return (
+                      <div key={i} className="flex gap-2 rounded-lg border border-rose-100 dark:border-rose-900/40 bg-rose-50/50 dark:bg-rose-900/10 p-2.5">
+                        <XCircle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-rose-500" />
+                        <span className="text-xs leading-relaxed">{text}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
         </Card>
       )}
 
@@ -424,7 +646,7 @@ export default function AnalyticsPage() {
       </Card>
 
       {/* ── Strategy & Counter-Narrative ── */}
-      {(overallStrategy || negClusters.length > 0 || commentTemplates.length > 0) && (
+      {(overallStrategy || negClusters.length > 0 || commentTemplates.length > 0 || contentAngles.length > 0) && (
         <Card className={`border-2 ${
           cnUrgency.includes("CRISIS") ? "border-rose-200 dark:border-rose-800"
           : cnUrgency.includes("MONITOR") ? "border-amber-200 dark:border-amber-800"
@@ -442,7 +664,6 @@ export default function AnalyticsPage() {
             )}
           </div>
 
-          {/* Overall strategy */}
           {overallStrategy && (
             <div className="mb-4 rounded-xl border border-border bg-card p-3">
               <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-muted uppercase tracking-wide">
@@ -453,7 +674,6 @@ export default function AnalyticsPage() {
           )}
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {/* Negative clusters */}
             {negClusters.length > 0 && (
               <div>
                 <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-muted uppercase tracking-wide">
@@ -473,9 +693,7 @@ export default function AnalyticsPage() {
                         )}
                       </div>
                       {cluster.examples && cluster.examples.length > 0 && (
-                        <p className="text-[11px] text-muted italic line-clamp-1">
-                          "{cluster.examples[0]}"
-                        </p>
+                        <p className="text-[11px] text-muted italic line-clamp-1">"{cluster.examples[0]}"</p>
                       )}
                     </div>
                   ))}
@@ -483,7 +701,6 @@ export default function AnalyticsPage() {
               </div>
             )}
 
-            {/* Comment templates */}
             {commentTemplates.length > 0 && (
               <div>
                 <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-muted uppercase tracking-wide">
@@ -497,9 +714,7 @@ export default function AnalyticsPage() {
                           For: {tmpl.for}
                         </div>
                       )}
-                      <p className="text-xs leading-relaxed text-fg">
-                        {tmpl.template || tmpl.text || tmpl}
-                      </p>
+                      <p className="text-xs leading-relaxed text-fg">{tmpl.template || tmpl.text || tmpl}</p>
                     </div>
                   ))}
                 </div>
@@ -507,7 +722,6 @@ export default function AnalyticsPage() {
             )}
           </div>
 
-          {/* Content angles */}
           {contentAngles.length > 0 && (
             <div className="mt-4">
               <div className="mb-2 text-xs font-semibold text-muted uppercase tracking-wide">Content Angles to Amplify</div>
@@ -567,10 +781,7 @@ export default function AnalyticsPage() {
               Training complete — Lexicon v{training.stats.lexicon_version}
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs">
-              <div>
-                <span className="text-muted">Samples used: </span>
-                <b>{training.stats.total_samples?.toLocaleString()}</b>
-              </div>
+              <div><span className="text-muted">Samples used: </span><b>{training.stats.total_samples?.toLocaleString()}</b></div>
               <div>
                 <span className="text-muted">Heuristic accuracy: </span>
                 <b className={training.stats.heuristic_accuracy_pct >= 70 ? "text-emerald-600" : "text-amber-600"}>
@@ -631,6 +842,9 @@ export default function AnalyticsPage() {
             <div>🔤 Keywords tracked: <b>{words.length}</b></div>
             {sortedLangs.length > 0 && (
               <div>🌐 Top language: <b className="capitalize">{sortedLangs[0][0]}</b> ({Math.round(sortedLangs[0][1] * 100 / (totalLangCount || 1))}%)</div>
+            )}
+            {healthScore > 0 && (
+              <div className={healthColor.text}>🏥 Reputation health: <b>{healthScore}/100 ({healthStatus})</b></div>
             )}
             <div className={`mt-1 font-semibold ${crisisColor}`}>
               {negPct >= 50 ? "⚠️ Crisis monitoring active" : negPct >= 30 ? "⚠️ Elevated negative — monitor" : "✅ Sentiment stable"}
