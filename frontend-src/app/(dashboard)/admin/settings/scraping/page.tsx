@@ -47,8 +47,8 @@ const EXTENSION_STEPS = [
     body: "Click the ORM Auto Sync icon. In the popup:",
     bullets: [
       "API URL: https://orm.itechexpand.com/api/v1",
-      "Email: admin@orm.local",
-      "Password: Admin@123",
+      "Email: your-login-email@example.com",
+      "Password: your-dashboard-password",
     ],
   },
   {

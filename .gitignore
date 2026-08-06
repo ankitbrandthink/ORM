@@ -8,11 +8,11 @@ backend/*.db
 
 # Node / Next.js
 frontend-src/node_modules/
-frontend-src/.next/cache/
+frontend-src/.next/
 frontend-src/*.tar.gz
 frontend-src/*.zip
 frontend-src/.wwebjs_cache/
-frontend/.next/cache/
+frontend/.next/
 frontend/node_modules/
 
 # Uploads & runtime data (never commit API keys / config)

@@ -255,8 +255,8 @@ def signup(body: SignupRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
-    # reCAPTCHA check
-    if settings.RECAPTCHA_ENABLED and body.recaptcha_token:
+    # reCAPTCHA check — only runs when RECAPTCHA_SECRET is configured
+    if settings.RECAPTCHA_ENABLED and settings.RECAPTCHA_SECRET and body.recaptcha_token:
         if not _verify_recaptcha(body.recaptcha_token):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "reCAPTCHA verification failed")
 

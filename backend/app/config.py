@@ -49,8 +49,9 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "noreply@orm.brandthink.in"
 
-    # Google reCAPTCHA v2 — test keys work on any domain for development
-    RECAPTCHA_SECRET: str = "6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ7GF_pA4"
+    # Google reCAPTCHA v2 — set RECAPTCHA_SECRET in your .env for production.
+    # Defaults to Google's official public test secret (always passes; for dev only).
+    RECAPTCHA_SECRET: str = ""
     RECAPTCHA_ENABLED: bool = True
 
     @property
