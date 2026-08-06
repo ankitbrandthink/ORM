@@ -218,7 +218,10 @@ function ProfileCard({ profile, onSyncDone }: { profile: SyncProfile; onSyncDone
   const pollStatus = useCallback(async (_jobId: string) => {
     // Poll the DB-backed profile status endpoint — works across all uvicorn workers.
     // The in-memory /sync/status/{job_id} only lives in one worker process.
-    let seenActive = false;
+    // Completion is detected by matching current_job_id (stored in profile.meta by
+    // trigger_sync) rather than relying on timestamps or seenActive flags, which can
+    // fail when the sync finishes before the first 3-second poll or when server/client
+    // clocks differ (e.g. UTC backend vs IST browser).
     const startedAt = Date.now();
     for (let i = 0; i < 180; i++) {
       await new Promise(r => setTimeout(r, 3000));
@@ -231,7 +234,6 @@ function ProfileCard({ profile, onSyncDone }: { profile: SyncProfile; onSyncDone
         const stage: string = data.sync_status || "idle";
 
         if (["queued", "running", "syncing", "storing"].includes(stage)) {
-          seenActive = true;
           setProgress({
             done: data.sync_posts_done || 0,
             total: data.sync_total_posts || 0,
@@ -244,19 +246,23 @@ function ProfileCard({ profile, onSyncDone }: { profile: SyncProfile; onSyncDone
           setSyncError(data.sync_error || "Sync failed");
           return;
         }
-        // Detect completion: either we observed an active stage, or last_synced is
-        // timestamped after we started (handles sub-3-second syncs).
-        const lastSyncMs = data.last_synced ? new Date(data.last_synced).getTime() : 0;
-        if (stage === "done" && (seenActive || lastSyncMs >= startedAt)) {
-          setSyncing(false);
-          setCurrentStatus("done");
-          setSyncError(null);
-          setLastSynced(data.last_synced || new Date().toISOString());
-          setPostCount(data.post_count || 0);
-          setCommentCount(data.comment_count || 0);
-          await loadPosts();
-          onSyncDone();
-          return;
+        if (stage === "done") {
+          // Accept completion if: job_id matches (primary), OR this sync was recently
+          // updated on the server (fallback for edge cases where job_id isn't set yet).
+          const jobMatches = data.current_job_id === _jobId;
+          const syncUpdatedMs = data.sync_updated ? new Date(data.sync_updated).getTime() : 0;
+          const recentlyUpdated = syncUpdatedMs >= startedAt - 10_000; // within 10s of trigger
+          if (jobMatches || recentlyUpdated) {
+            setSyncing(false);
+            setCurrentStatus("done");
+            setSyncError(null);
+            setLastSynced(data.last_synced || new Date().toISOString());
+            setPostCount(data.post_count || 0);
+            setCommentCount(data.comment_count || 0);
+            await loadPosts();
+            onSyncDone();
+            return;
+          }
         }
       } catch { /* ignore */ }
     }

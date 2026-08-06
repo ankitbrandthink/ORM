@@ -72,7 +72,7 @@ def _persist(db: Session, profile: SocialProfile, *, stage: str,
         if data_source is not None:
             meta["data_source"] = data_source
         if done:
-            meta["last_synced"] = datetime.utcnow().isoformat()
+            meta["last_synced"] = datetime.now(timezone.utc).isoformat()
         profile.meta = meta
         # Force SQLAlchemy to detect the JSON mutation
         from sqlalchemy.orm.attributes import flag_modified
@@ -252,7 +252,6 @@ async def _run_sync(job_id: str, profile, api_key: str | None,
 
             real_comment_count = np.metrics.get("real_comment_total",
                                                   np.metrics.get("comments", 0))
-            metrics_stored = {**np.metrics, "real_comment_total": real_comment_count}
 
             # Build a reliable permalink from url or construct from platform+external_id
             def _make_permalink(platform: str, ext_id: str, url: str) -> str:
@@ -271,6 +270,7 @@ async def _run_sync(job_id: str, profile, api_key: str | None,
             )
 
             if not existing:
+                metrics_stored = {**np.metrics, "real_comment_total": real_comment_count}
                 post = Post(
                     id=str(uuid.uuid4()),
                     tenant_id=profile.tenant_id,
@@ -300,8 +300,11 @@ async def _run_sync(job_id: str, profile, api_key: str | None,
                 db.add(pa)
             else:
                 post = existing
-                # Update real count even on existing posts
-                post.metrics = {**(post.metrics or {}), **np.metrics, "real_comment_total": real_comment_count}
+                # Preserve a non-zero real count if the new scrape returned 0
+                prev_real = (post.metrics or {}).get("real_comment_total", 0)
+                effective_real = real_comment_count if real_comment_count > 0 else prev_real
+                post.metrics = {**(post.metrics or {}), **np.metrics, "real_comment_total": effective_real}
+                real_comment_count = effective_real
                 # Backfill permalink for older posts that were stored without it
                 if not post.permalink and post_permalink:
                     post.permalink = post_permalink
@@ -350,9 +353,14 @@ async def _run_sync(job_id: str, profile, api_key: str | None,
                     ))
                     c_count += 1
             else:
-                # Generate representative comments capped at real_comment_count
+                # Generate representative comments capped at real_comment_count.
+                # Also run for existing posts that somehow have 0 stored comments.
                 cap = min(real_comment_count or 120, 200)
-                if cap > 0 and not existing:
+                existing_comment_count = (
+                    db.query(Comment).filter(Comment.post_id == post.id).count()
+                    if existing else 0
+                )
+                if cap > 0 and (not existing or existing_comment_count == 0):
                     from app.ai.sample_comments import generate as gen_comments
                     post_analysis = heuristic_post(post.id, np.content)
                     dominant = post_analysis.get("sentiment", "Neutral")

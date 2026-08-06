@@ -46,6 +46,7 @@ def _profile_status(profile: SocialProfile) -> dict:
         "sync_error": meta.get("sync_error"),
         "last_synced": meta.get("last_synced"),
         "data_source": meta.get("data_source", "pending"),
+        "current_job_id": meta.get("current_job_id"),
     }
 
 
