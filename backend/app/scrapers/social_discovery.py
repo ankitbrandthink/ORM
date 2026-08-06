@@ -1,11 +1,14 @@
-"""Social Discovery — keyword search via nitter (Twitter/X) + HackerNews + Mastodon.
+"""Social Discovery — keyword search via nitter (Twitter/X) + Mastodon.
 
-Searches multiple social platforms for accounts discussing a keyword, then
+Searches social platforms for influencer accounts discussing a keyword, then
 classifies their stance as Pro, Anti, or Mixed toward the entity.
 
-Data sources (no API keys required, VPS-accessible):
+HackerNews intentionally excluded — it is a tech forum, not a social influencer
+platform. Media/news outlet handles are also filtered out so only genuine social
+media voices appear in results.
+
+Data sources (no API keys required):
   • Nitter  — Twitter/X RSS (best effort; instances sometimes down)
-  • HackerNews — Algolia search API (reliable, no auth)
   • Mastodon — mastodon.social accounts search (no auth needed)
 """
 from __future__ import annotations
@@ -13,23 +16,24 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional
 
 logger = logging.getLogger("orm.social_discovery")
 
-# Twitter frontends — tried in parallel; more instances = better coverage
+# Twitter frontends — tried in parallel
 _NITTER_INSTANCES = [
     "https://nitter.net",
     "https://nitter.privacydev.net",
-    "https://nitter.cz",
     "https://nitter.poast.org",
     "https://nitter.1d4.us",
     "https://nitter.kavin.rocks",
     "https://xcancel.com",
     "https://nitter.tiekoetter.com",
     "https://nitter.moomoo.me",
+    "https://nitter.cz",
     "https://nitter.rawbit.ninja",
 ]
 
@@ -39,28 +43,87 @@ _TWITTER_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-_HN_HEADERS = {
-    "User-Agent": "ORM-CMS/1.0 (keyword monitoring bot)",
-    "Accept": "application/json",
-}
-
 _MASTODON_HEADERS = {
     "User-Agent": "ORM-CMS/1.0 (social discovery bot)",
     "Accept": "application/json",
 }
 
-# Handles/usernames to skip — noise accounts
+# Handles/usernames to always skip
 _SKIP_HANDLES = {
     "search", "hashtag", "i", "intent", "home", "explore",
     "notifications", "messages", "twitter", "x", "AutoModerator",
     "[deleted]", "deleted", "dang", "pg", "hn",
 }
 
+# Keywords in a handle that indicate a media/news outlet — exclude these
+_MEDIA_HANDLE_KEYWORDS = {
+    "news", "media", "press", "channel", "tv", "fm", "radio", "live",
+    "breaking", "alert", "update", "daily", "weekly", "times", "post",
+    "report", "reporter", "journal", "gazette", "herald", "tribune",
+    "review", "digest", "bulletin", "wire", "agency", "bureau",
+}
+
+# Known media outlet handles to exclude explicitly
+_KNOWN_MEDIA_HANDLES = {
+    "ndtv", "bbc", "bbcnews", "bbcbreaking", "cnn", "cnni", "cnnbrk",
+    "aajtak", "abpnews", "intoday", "news18", "zeenews", "zeebusiness",
+    "republicworld", "timesnow", "indiatoday", "thehindu", "hindustantimes",
+    "livemint", "economictimes", "theprint", "scroll_in", "thewire_in",
+    "firstpost", "newslaundry", "quint", "thequint", "navbharattimes",
+    "punjabkesari", "amarujala", "jagran", "dainikbhaskar", "jansatta",
+    "moneycontrol", "businesstoday", "businessstandard", "mint", "reuters",
+    "afp", "apnews", "ians", "ani", "pti", "tnm", "outlookindia",
+    "outlook", "downtoearth", "frontline", "indianexpress", "bloomberg",
+    "guardian", "nytimes", "cnbc", "aljazeera", "wionews", "republic",
+    "deccanherald", "deccanchronicle", "telegraphindia", "theweek",
+    "mathrubhumi", "manorama", "asianetnews", "sbnation", "espn",
+}
+
+# Stop words for keyword cluster extraction
+_STOP_WORDS = {
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+    "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "will", "would", "could", "should", "may", "might",
+    "this", "that", "these", "those", "i", "me", "my", "we", "our", "you",
+    "your", "he", "she", "it", "they", "their", "what", "which", "who",
+    "with", "from", "not", "no", "by", "so", "if", "as", "of", "than",
+    "then", "just", "also", "more", "about", "up", "out", "all", "one",
+    "can", "get", "got", "its", "new", "like", "via", "how", "when", "why",
+    "her", "him", "his", "them", "https", "http", "www", "rt", "amp",
+    "co", "pic", "twitter", "com", "that", "this", "very", "been", "into",
+    "over", "after", "said", "here", "there", "now", "only", "too", "even",
+    "well", "back", "any", "good", "want", "look", "think", "know", "time",
+    "year", "people", "way", "day", "man", "old", "great", "big",
+}
+
+
+def _is_media_handle(handle: str) -> bool:
+    """Return True if the handle appears to be a media/news outlet."""
+    h = handle.lower().strip("@")
+    if h in _KNOWN_MEDIA_HANDLES:
+        return True
+    # Check for media keywords embedded in the handle
+    return any(kw in h for kw in _MEDIA_HANDLE_KEYWORDS)
+
+
+def extract_keyword_clusters(posts: list[dict], top_n: int = 8) -> list[str]:
+    """Extract top recurring keywords from a list of posts' content."""
+    all_text = " ".join(p.get("content", "") for p in posts).lower()
+    all_text = re.sub(r"https?://\S+", " ", all_text)
+    all_text = re.sub(r"[^a-zA-Z0-9#@\s]", " ", all_text)
+    words = [
+        w.strip("#@")
+        for w in all_text.split()
+        if len(w) > 2 and w.strip("#@") not in _STOP_WORDS and w.strip("#@").isalpha()
+    ]
+    counts = Counter(words)
+    return [w for w, _ in counts.most_common(top_n)]
+
 
 # ── Twitter/X via nitter ─────────────────────────────────────────────────────
 
 def _parse_nitter_rss(xml_text: str, seen_ids: set) -> list[dict]:
-    """Parse nitter RSS XML and return tweet dicts (skips seen_ids)."""
+    """Parse nitter RSS XML and return tweet dicts (filters media handles)."""
     import xml.etree.ElementTree as ET
     results = []
     try:
@@ -88,6 +151,8 @@ def _parse_nitter_rss(xml_text: str, seen_ids: set) -> list[dict]:
 
             if handle.lower() in _SKIP_HANDLES:
                 continue
+            if _is_media_handle(handle):
+                continue
             if tweet_id in seen_ids:
                 continue
             seen_ids.add(tweet_id)
@@ -106,52 +171,10 @@ def _parse_nitter_rss(xml_text: str, seen_ids: set) -> list[dict]:
                 "url": f"https://x.com/{handle}/status/{tweet_id}",
                 "published_at": pub_at.isoformat(),
                 "platform": "twitter",
+                "followers_count": None,
             })
         except Exception:
             continue
-    return results
-
-
-# ── HackerNews via Algolia API ────────────────────────────────────────────────
-
-def _parse_hn_json(json_text: str) -> list[dict]:
-    """Parse HackerNews Algolia search response into post dicts."""
-    results = []
-    try:
-        data = json.loads(json_text)
-        hits = data.get("hits", [])
-        for hit in hits:
-            author = (hit.get("author") or "").strip()
-            if not author or author.lower() in _SKIP_HANDLES:
-                continue
-            title = (hit.get("title") or "").strip()
-            story_url = (hit.get("url") or "").strip()
-            content = title
-            if story_url:
-                content = f"{title} — {story_url}"[:500]
-            if not content or len(content) < 5:
-                continue
-            obj_id = hit.get("objectID", "")
-            if not obj_id:
-                continue
-            created = hit.get("created_at", "")
-            pub_at = datetime.now(timezone.utc)
-            if created:
-                try:
-                    pub_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                except Exception:
-                    pass
-            results.append({
-                "handle": author,
-                "tweet_id": f"hn_{obj_id}",
-                "content": content,
-                "url": f"https://news.ycombinator.com/item?id={obj_id}",
-                "published_at": pub_at.isoformat(),
-                "platform": "hackernews",
-                "score": hit.get("points", 0) or 0,
-            })
-    except Exception as e:
-        logger.debug("HackerNews JSON parse error: %s", e)
     return results
 
 
@@ -168,6 +191,8 @@ def _parse_mastodon_accounts(json_text: str, keyword: str) -> list[dict]:
             username = (acc.get("username") or "").strip()
             if not username or username.lower() in _SKIP_HANDLES:
                 continue
+            if _is_media_handle(username):
+                continue
             display_name = (acc.get("display_name") or username).strip()
             note = re.sub(r"<[^>]+>", " ", acc.get("note") or "").strip()[:300]
             content = f"{display_name}: {note}" if note else display_name
@@ -180,20 +205,42 @@ def _parse_mastodon_accounts(json_text: str, keyword: str) -> list[dict]:
                 "url": acc_url,
                 "published_at": datetime.now(timezone.utc).isoformat(),
                 "platform": "mastodon",
-                "score": followers,
+                "followers_count": followers,
             })
     except Exception as e:
         logger.debug("Mastodon accounts parse error: %s", e)
     return results
 
 
+async def _fetch_twitter_followers(handle: str, session) -> Optional[int]:
+    """Try to get Twitter follower count from a Nitter profile page."""
+    for base in _NITTER_INSTANCES[:3]:
+        try:
+            r = await session.get(f"{base}/{handle}", timeout=6)
+            if r.status_code == 200:
+                m = re.search(r'(\d[\d,.]+[KMk]?)\s*[Ff]ollowers', r.text)
+                if not m:
+                    m = re.search(r'followers[^>]*>\s*([0-9,.]+[KMk]?)', r.text)
+                if m:
+                    raw = m.group(1).replace(",", "").strip()
+                    if raw.upper().endswith("K"):
+                        return int(float(raw[:-1]) * 1_000)
+                    if raw.upper().endswith("M"):
+                        return int(float(raw[:-1]) * 1_000_000)
+                    if raw.isdigit():
+                        return int(raw)
+        except Exception:
+            continue
+    return None
+
+
 # ── Combined search ───────────────────────────────────────────────────────────
 
 async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
-    """Search Twitter/X (via nitter) + HackerNews + Mastodon for posts about keyword.
+    """Search Twitter/X (via nitter) + Mastodon for influencer posts about keyword.
 
-    All sources are queried in parallel for speed.
-    Returns list of dicts: {handle, content, url, published_at, platform}
+    Returns list of dicts: {handle, content, url, published_at, platform, followers_count}
+    Media/news outlet handles are automatically excluded.
     """
     try:
         import asyncio
@@ -204,7 +251,6 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
     kw_clean = keyword.strip()
     slug = re.sub(r"[^a-zA-Z0-9]", "", kw_clean)
 
-    # Build keyword variants for Twitter
     tw_variants = [kw_clean]
     if slug and not kw_clean.startswith("#") and slug.lower() != kw_clean.lower():
         tw_variants.append(f"#{slug}")
@@ -214,7 +260,7 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
     seen_ids: set = set()
     results: list[dict] = []
 
-    async def fetch_nitter(session: "httpx.AsyncClient", base: str, kw: str) -> list[dict]:
+    async def fetch_nitter(session, base: str, kw: str) -> list[dict]:
         enc = kw.replace(" ", "+").replace("#", "%23").replace("@", "%40").replace('"', "%22")
         url = f"{base}/search/rss?q={enc}&f=tweets"
         try:
@@ -225,62 +271,7 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
             logger.debug("Nitter %s error for '%s': %s", base, kw, e)
         return []
 
-    async def fetch_hackernews(session: "httpx.AsyncClient", kw: str, recent: bool = False) -> list[dict]:
-        """Search HackerNews via Algolia API (reliable, no IP blocking)."""
-        try:
-            enc = kw.replace(" ", "+").replace('"', "%22")
-            endpoint = "search_by_date" if recent else "search"
-            url = f"https://hn.algolia.com/api/v1/{endpoint}?query={enc}&tags=story&hitsPerPage=25"
-            r = await session.get(url, timeout=10, headers=_HN_HEADERS)
-            if r.status_code == 200:
-                return _parse_hn_json(r.text)
-        except Exception as e:
-            logger.debug("HackerNews fetch error for '%s': %s", kw, e)
-        return []
-
-    async def fetch_hackernews_comments(session: "httpx.AsyncClient", kw: str) -> list[dict]:
-        """Search HackerNews comments — surfaces more authors."""
-        try:
-            enc = kw.replace(" ", "+").replace('"', "%22")
-            url = f"https://hn.algolia.com/api/v1/search?query={enc}&tags=comment&hitsPerPage=20"
-            r = await session.get(url, timeout=10, headers=_HN_HEADERS)
-            if r.status_code == 200:
-                data = json.loads(r.text)
-                hits = data.get("hits", [])
-                out = []
-                for hit in hits:
-                    author = (hit.get("author") or "").strip()
-                    if not author or author.lower() in _SKIP_HANDLES:
-                        continue
-                    comment_text = re.sub(r"<[^>]+>", " ", hit.get("comment_text") or "").strip()[:500]
-                    if not comment_text or len(comment_text) < 10:
-                        continue
-                    obj_id = hit.get("objectID", "")
-                    if not obj_id:
-                        continue
-                    created = hit.get("created_at", "")
-                    pub_at = datetime.now(timezone.utc)
-                    if created:
-                        try:
-                            pub_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                        except Exception:
-                            pass
-                    out.append({
-                        "handle": author,
-                        "tweet_id": f"hn_c_{obj_id}",
-                        "content": comment_text,
-                        "url": f"https://news.ycombinator.com/item?id={obj_id}",
-                        "published_at": pub_at.isoformat(),
-                        "platform": "hackernews",
-                        "score": hit.get("points", 0) or 0,
-                    })
-                return out
-        except Exception as e:
-            logger.debug("HackerNews comments error for '%s': %s", kw, e)
-        return []
-
-    async def fetch_mastodon_accounts(session: "httpx.AsyncClient", kw: str) -> list[dict]:
-        """Search Mastodon.social accounts — no auth required for basic account search."""
+    async def fetch_mastodon_accounts(session, kw: str) -> list[dict]:
         try:
             enc = kw.replace(" ", "+")
             url = f"https://mastodon.social/api/v2/search?q={enc}&type=accounts&limit=20&resolve=false"
@@ -308,15 +299,7 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
                 for i in range(min(3, len(_NITTER_INSTANCES)))
             ]
 
-        # HackerNews — top stories + recent + comments
-        tasks.append(fetch_hackernews(session, kw_clean, recent=False))
-        tasks.append(fetch_hackernews(session, kw_clean, recent=True))
-        tasks.append(fetch_hackernews_comments(session, kw_clean))
-        # Also try slug variant if different
-        if slug and slug.lower() != kw_clean.lower():
-            tasks.append(fetch_hackernews(session, slug, recent=False))
-
-        # Mastodon accounts
+        # Mastodon
         tasks.append(fetch_mastodon_accounts(session, kw_clean))
         if slug and slug.lower() != kw_clean.lower():
             tasks.append(fetch_mastodon_accounts(session, slug))
@@ -332,40 +315,24 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
                 seen_ids.add(tid)
                 results.append(item)
 
-    # Sort each platform's results by score/recency
     twitter_results = [r for r in results if r.get("platform") == "twitter"]
-    hn_results = sorted(
-        [r for r in results if r.get("platform") == "hackernews"],
-        key=lambda x: x.get("score", 0),
-        reverse=True,
-    )
     mastodon_results = sorted(
         [r for r in results if r.get("platform") == "mastodon"],
-        key=lambda x: x.get("score", 0),
+        key=lambda x: x.get("followers_count") or 0,
         reverse=True,
     )
 
-    tw_count = len(twitter_results)
-    hn_count = len(hn_results)
-    ms_count = len(mastodon_results)
-    if results:
-        logger.info(
-            "social_discovery: %d posts for '%s' (twitter=%d, hackernews=%d, mastodon=%d)",
-            len(results), kw_clean, tw_count, hn_count, ms_count,
-        )
-    else:
-        logger.info("social_discovery: no posts found for '%s'", kw_clean)
+    logger.info(
+        "social_discovery: %d posts for '%s' (twitter=%d, mastodon=%d)",
+        len(results), kw_clean, len(twitter_results), len(mastodon_results),
+    )
 
-    # Interleave: Twitter first, then HN, then Mastodon
+    # Interleave Twitter first, then Mastodon
     merged: list[dict] = []
-    ti, hi, mi = 0, 0, 0
-    while len(merged) < limit and (
-        ti < len(twitter_results) or hi < len(hn_results) or mi < len(mastodon_results)
-    ):
+    ti, mi = 0, 0
+    while len(merged) < limit and (ti < len(twitter_results) or mi < len(mastodon_results)):
         if ti < len(twitter_results):
             merged.append(twitter_results[ti]); ti += 1
-        if hi < len(hn_results) and len(merged) < limit:
-            merged.append(hn_results[hi]); hi += 1
         if mi < len(mastodon_results) and len(merged) < limit:
             merged.append(mastodon_results[mi]); mi += 1
     return merged
@@ -389,7 +356,7 @@ _ANTI_WORDS = {
     "remove", "out", "failed", "useless", "pathetic", "disgrace", "exposed",
     "arrest", "jail", "fake", "propaganda", "lies", "lying", "deceptive",
     "incompetent", "terrible", "horrible", "outrage", "protest", "demand",
-    "refused", "ruthless", "hate speech", "surveillance", "authoritarian",
+    "refused", "ruthless", "authoritarian", "corrupt", "corruption",
 }
 
 

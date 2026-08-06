@@ -4,9 +4,13 @@ POST /social-listening/discover        — trigger keyword search (background)
 GET  /social-listening/influencers     — list discovered influencers
 GET  /social-listening/keywords        — list searched keywords for a client
 DELETE /social-listening/influencers/{id}  — soft-delete one record
+
+Only Twitter/X and Mastodon sources are used. HackerNews and press/media
+outlet handles are excluded so results contain genuine social influencers only.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -19,7 +23,11 @@ from app.config import settings
 from app.database import SessionLocal, get_db
 from app.dependencies import CurrentUser, get_current_user
 from app.models import DiscoveredInfluencer, DiscoveredPost
-from app.scrapers.social_discovery import classify_stance, search_twitter_keyword
+from app.scrapers.social_discovery import (
+    classify_stance,
+    extract_keyword_clusters,
+    search_twitter_keyword,
+)
 
 router = APIRouter(prefix="/social-listening", tags=["social-listening"])
 logger = logging.getLogger("orm.social_listening")
@@ -30,34 +38,50 @@ def _get_api_key() -> Optional[str]:
     return key if (key and key.startswith("sk-ant")) else None
 
 
+def _follower_tier(count: Optional[int]) -> str:
+    """Categorise follower count into display tier."""
+    if count is None:
+        return "unknown"
+    if count >= 1_000_000:
+        return "mega"          # 10L+
+    if count >= 100_000:
+        return "macro"         # 1L–10L
+    if count >= 10_000:
+        return "mid"           # 10K–1L
+    return "micro"             # < 10K
+
+
 # ── Background discovery task ────────────────────────────────────────────────
 
 async def _run_discovery(tenant_id: str, client_id: str, keyword: str, limit: int):
-    """Search Twitter/X for keyword, classify stance, upsert influencer records."""
+    """Search Twitter/X & Mastodon for keyword, classify stance, upsert records.
+
+    Media outlet handles are already excluded by social_discovery.py.
+    """
     db = SessionLocal()
     try:
         tweets = await search_twitter_keyword(keyword, limit=limit)
         if not tweets:
-            logger.info("social_listening: no tweets found for '%s'", keyword)
+            logger.info("social_listening: no posts found for '%s'", keyword)
             return
 
         api_key = _get_api_key()
 
-        # Group tweets by Twitter handle
+        # Group posts by handle + platform
         by_handle: dict[str, list[dict]] = {}
         for tw in tweets:
-            by_handle.setdefault(tw["handle"], []).append(tw)
+            # Only process Twitter and Mastodon (exclude any stray HN items)
+            if tw.get("platform") not in ("twitter", "mastodon"):
+                continue
+            key = f"{tw['handle']}::{tw.get('platform', 'twitter')}"
+            by_handle.setdefault(key, []).append(tw)
 
-        for handle, handle_tweets in by_handle.items():
+        for handle_key, handle_posts in by_handle.items():
+            handle, platform = handle_key.split("::", 1)
             pro = anti = neutral = 0
             classified_posts: list[dict] = []
 
-            # Determine platform from first post (all tweets for a handle share platform)
-            platform = handle_tweets[0].get("platform", "twitter") if handle_tweets else "twitter"
-            if platform not in ("twitter", "reddit", "hackernews", "mastodon"):
-                platform = "twitter"
-
-            for tw in handle_tweets[:5]:  # cap AI calls per handle
+            for tw in handle_posts[:5]:  # cap AI calls per handle
                 stance = await classify_stance(tw["content"], keyword, api_key)
                 if stance == "Pro":
                     pro += 1
@@ -74,15 +98,18 @@ async def _run_discovery(tenant_id: str, client_id: str, keyword: str, limit: in
             else:
                 overall = "Mixed"
 
-            # Build profile URL based on platform
-            if platform == "reddit":
-                profile_url = f"https://reddit.com/u/{handle}"
-            elif platform == "hackernews":
-                profile_url = f"https://news.ycombinator.com/user?id={handle}"
-            elif platform == "mastodon":
-                profile_url = f"https://mastodon.social/@{handle}"
+            # Build profile URL
+            if platform == "mastodon":
+                profile_url = handle_posts[0].get("url") or f"https://mastodon.social/@{handle}"
             else:
                 profile_url = f"https://x.com/{handle}"
+
+            # Extract keyword clusters from post content
+            clusters = extract_keyword_clusters(handle_posts, top_n=8)
+            clusters_json = json.dumps(clusters)
+
+            # Followers count (Mastodon provides it; Twitter is best-effort None)
+            followers_count = handle_posts[0].get("followers_count")
 
             # Upsert influencer
             inf = db.query(DiscoveredInfluencer).filter(
@@ -98,8 +125,11 @@ async def _run_discovery(tenant_id: str, client_id: str, keyword: str, limit: in
                 inf.stance = overall
                 inf.positive_count = pro
                 inf.negative_count = anti
-                inf.total_posts = len(handle_tweets)
+                inf.total_posts = len(handle_posts)
                 inf.last_seen = datetime.now(timezone.utc)
+                inf.keyword_clusters = clusters_json
+                if followers_count is not None:
+                    inf.followers_count = followers_count
             else:
                 inf = DiscoveredInfluencer(
                     tenant_id=tenant_id,
@@ -111,12 +141,14 @@ async def _run_discovery(tenant_id: str, client_id: str, keyword: str, limit: in
                     stance=overall,
                     positive_count=pro,
                     negative_count=anti,
-                    total_posts=len(handle_tweets),
+                    total_posts=len(handle_posts),
+                    followers_count=followers_count,
+                    keyword_clusters=clusters_json,
                 )
                 db.add(inf)
                 db.flush()
 
-            # Insert new posts (skip duplicates by URL)
+            # Insert new posts (deduped by URL)
             existing_urls = {
                 row[0]
                 for row in db.query(DiscoveredPost.post_url)
@@ -186,6 +218,7 @@ async def get_discovered_influencers(
     keyword: Optional[str] = None,
     platform: Optional[str] = None,
     stance: Optional[str] = None,
+    follower_tier: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
@@ -201,17 +234,28 @@ async def get_discovered_influencers(
     if stance:
         q = q.filter(DiscoveredInfluencer.stance == stance)
 
-    influencers = q.order_by(DiscoveredInfluencer.total_posts.desc()).limit(100).all()
+    influencers = q.order_by(DiscoveredInfluencer.total_posts.desc()).limit(200).all()
 
     result = []
     for inf in influencers:
+        tier = _follower_tier(inf.followers_count)
+        # Apply follower_tier filter (unknown tier passes all filters)
+        if follower_tier and follower_tier != "all" and tier != "unknown" and tier != follower_tier:
+            continue
+
         posts = (
             db.query(DiscoveredPost)
             .filter(DiscoveredPost.influencer_id == inf.id, DiscoveredPost.is_deleted == False)
             .order_by(DiscoveredPost.published_at.desc())
-            .limit(5)
+            .limit(10)
             .all()
         )
+
+        try:
+            clusters = json.loads(inf.keyword_clusters) if inf.keyword_clusters else []
+        except Exception:
+            clusters = []
+
         result.append({
             "id": inf.id,
             "platform": inf.platform,
@@ -222,6 +266,9 @@ async def get_discovered_influencers(
             "positive_count": inf.positive_count,
             "negative_count": inf.negative_count,
             "total_posts": inf.total_posts,
+            "followers_count": inf.followers_count,
+            "follower_tier": tier,
+            "keyword_clusters": clusters,
             "last_seen": inf.last_seen.isoformat() if inf.last_seen else None,
             "posts": [
                 {

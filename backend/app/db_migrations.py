@@ -225,4 +225,14 @@ def run_migrations():
             conn.commit()
             log.info("[migration] Phase 8 — added comments.author_url column")
 
+        # ── Phase 9: discovered_influencers enrichment fields ─────────────────
+        if not _column_exists(conn, "discovered_influencers", "followers_count"):
+            conn.execute(text("ALTER TABLE discovered_influencers ADD COLUMN followers_count INTEGER DEFAULT NULL"))
+            conn.commit()
+            log.info("[migration] Phase 9 — added discovered_influencers.followers_count")
+        if not _column_exists(conn, "discovered_influencers", "keyword_clusters"):
+            conn.execute(text("ALTER TABLE discovered_influencers ADD COLUMN keyword_clusters TEXT DEFAULT NULL"))
+            conn.commit()
+            log.info("[migration] Phase 9 — added discovered_influencers.keyword_clusters")
+
     log.info("[migration] All migrations complete")

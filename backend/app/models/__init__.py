@@ -156,6 +156,8 @@ class DiscoveredInfluencer(Base, TimestampMixin):
     positive_count = Column(Integer, default=0)
     negative_count = Column(Integer, default=0)
     total_posts = Column(Integer, default=0)
+    followers_count = Column(Integer, nullable=True)
+    keyword_clusters = Column(Text, nullable=True)  # JSON list of top keywords
     last_seen = Column(DateTime(timezone=True), server_default=func.now())
     posts = relationship("DiscoveredPost", back_populates="influencer", cascade="all, delete-orphan")
 
