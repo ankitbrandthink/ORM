@@ -17,7 +17,6 @@ import re
 import subprocess
 from collections import Counter
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from typing import Optional
 
 logger = logging.getLogger("orm.social_discovery")
@@ -120,14 +119,16 @@ _STOP_WORDS = {
     "like", "share", "comment", "channel", "youtube", "instagram", "facebook",
 }
 
-# ── Check yt-dlp availability once at import ──────────────────────────────────
-try:
-    _ytdlp_check = subprocess.run(
-        ["yt-dlp", "--version"], capture_output=True, timeout=5
-    )
-    _YTDLP_AVAILABLE = _ytdlp_check.returncode == 0
-except Exception:
-    _YTDLP_AVAILABLE = False
+# ── Locate yt-dlp binary (handles restricted systemd PATH) ────────────────────
+_YTDLP_PATH: Optional[str] = None
+for _ytdlp_candidate in ["yt-dlp", "/usr/local/bin/yt-dlp", "/usr/bin/yt-dlp"]:
+    try:
+        if subprocess.run([_ytdlp_candidate, "--version"], capture_output=True, timeout=5).returncode == 0:
+            _YTDLP_PATH = _ytdlp_candidate
+            break
+    except Exception:
+        continue
+_YTDLP_AVAILABLE = _YTDLP_PATH is not None
 
 
 # ── Utility functions ─────────────────────────────────────────────────────────
@@ -159,61 +160,116 @@ def extract_keyword_clusters(posts: list[dict], top_n: int = 8) -> list[str]:
     return [w for w, _ in Counter(words).most_common(top_n)]
 
 
-# ── Twitter/X via Nitter ──────────────────────────────────────────────────────
+# ── Twitter/X via DuckDuckGo + Nitter tweet pages ────────────────────────────
 
-def _parse_nitter_rss(xml_text: str, seen_ids: set) -> list[dict]:
-    """Parse Nitter RSS XML into tweet dicts; filters media handles."""
-    import xml.etree.ElementTree as ET
-    results = []
+def _parse_nitter_tweet_page(html: str, handle: str, tweet_id: str) -> Optional[str]:
+    """Extract tweet content from a Nitter single-tweet HTML page."""
     try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return []
-    for item in root.findall(".//item"):
+        m = re.search(r'<div[^>]*class="[^"]*tweet-content[^"]*"[^>]*>(.*?)</div>', html, re.DOTALL)
+        if m:
+            raw = re.sub(r"<[^>]+>", " ", m.group(1))
+            raw = re.sub(r"\s+", " ", raw).strip()
+            if len(raw) > 10:
+                return raw[:500]
+    except Exception:
+        pass
+    return None
+
+
+async def _fetch_tweet_content(handle: str, tweet_id: str, session) -> Optional[str]:
+    """Fetch a single tweet's text from Nitter profile pages."""
+    for base in _NITTER_INSTANCES[:4]:
         try:
-            title = (item.findtext("title") or "").strip()
-            link = (item.findtext("link") or "").strip()
-            pub_raw = item.findtext("pubDate") or ""
-            desc = (item.findtext("description") or "").strip()
-
-            content = re.sub(r"^[^:]+:\s*", "", title, count=1).strip()
-            if not content and desc:
-                content = re.sub(r"<[^>]+>", " ", desc).strip()[:500]
-            if not content or len(content) < 5:
-                continue
-
-            m = re.search(r"/([^/]+)/status/(\d+)", link)
-            if not m:
-                continue
-            handle, tweet_id = m.group(1), m.group(2)
-
-            if handle.lower() in _SKIP_HANDLES:
-                continue
-            if _is_media_handle(handle):
-                continue
-            if tweet_id in seen_ids:
-                continue
-            seen_ids.add(tweet_id)
-
-            pub_at = datetime.now(timezone.utc)
-            if pub_raw:
-                try:
-                    pub_at = parsedate_to_datetime(pub_raw).astimezone(timezone.utc)
-                except Exception:
-                    pass
-
-            results.append({
-                "handle": handle,
-                "tweet_id": tweet_id,
-                "content": content[:500],
-                "url": f"https://x.com/{handle}/status/{tweet_id}",
-                "published_at": pub_at.isoformat(),
-                "platform": "twitter",
-                "followers_count": None,
-                "profile_url": f"https://x.com/{handle}",
-            })
+            r = await session.get(f"{base}/{handle}/status/{tweet_id}", timeout=8)
+            if r.status_code == 200:
+                content = _parse_nitter_tweet_page(r.text, handle, tweet_id)
+                if content:
+                    return content
         except Exception:
             continue
+    return None
+
+
+async def _search_duckduckgo_twitter(keyword: str, limit: int, session) -> list[dict]:
+    """Search DuckDuckGo HTML for Twitter/X posts about keyword.
+
+    Extracts tweet URLs from search results; fetches content via Nitter for
+    tweets where DuckDuckGo provides no snippet.
+    """
+    from html import unescape
+
+    results: list[dict] = []
+    seen_ids: set = set()
+
+    queries = [
+        f'site:twitter.com "{keyword}"',
+        f'site:x.com "{keyword}"',
+        f'site:twitter.com {keyword}',
+    ]
+
+    ddg_headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate",
+        "DNT": "1",
+    }
+
+    for query in queries:
+        if len(results) >= limit:
+            break
+        try:
+            enc_q = query.replace(" ", "+").replace('"', "%22")
+            r = await session.get(
+                f"https://html.duckduckgo.com/html/?q={enc_q}&kl=us-en",
+                headers=ddg_headers, timeout=12,
+            )
+            if r.status_code != 200:
+                continue
+
+            html = r.text
+            url_pattern = r'https?://(?:twitter\.com|x\.com)/([A-Za-z0-9_]{1,50})/status/(\d{5,25})'
+            matches = re.findall(url_pattern, html)
+
+            for handle, tweet_id in matches:
+                if len(results) >= limit:
+                    break
+                if handle.lower() in _SKIP_HANDLES:
+                    continue
+                if _is_media_handle(handle):
+                    continue
+                if tweet_id in seen_ids:
+                    continue
+                seen_ids.add(tweet_id)
+
+                # Extract nearby text snippet from DDG result HTML
+                snippet = ""
+                url_pos = html.find(f"/{handle}/status/{tweet_id}")
+                if url_pos >= 0:
+                    nearby = html[max(0, url_pos - 300):url_pos + 600]
+                    snippet = re.sub(r"<[^>]+>", " ", nearby)
+                    snippet = re.sub(r"\s+", " ", snippet).strip()
+                    snippet = unescape(snippet)[:400]
+
+                if not snippet or len(snippet) < 15:
+                    snippet = f"Post about {keyword}"
+
+                results.append({
+                    "handle": handle,
+                    "tweet_id": tweet_id,
+                    "content": snippet,
+                    "url": f"https://x.com/{handle}/status/{tweet_id}",
+                    "published_at": datetime.now(timezone.utc).isoformat(),
+                    "platform": "twitter",
+                    "followers_count": None,
+                    "profile_url": f"https://x.com/{handle}",
+                })
+
+        except Exception as e:
+            logger.debug("DuckDuckGo Twitter search error for '%s': %s", query, e)
+            continue
+
+    logger.info("DuckDuckGo: %d tweets found for '%s'", len(results), keyword)
     return results
 
 
@@ -265,7 +321,7 @@ async def search_youtube_keyword(keyword: str, limit: int = 15) -> list[dict]:
         def _run() -> subprocess.CompletedProcess:
             return subprocess.run(
                 [
-                    "yt-dlp",
+                    _YTDLP_PATH,
                     f"ytsearch{limit}:{keyword}",
                     "--dump-json",
                     "--no-download",
@@ -331,10 +387,16 @@ async def search_youtube_keyword(keyword: str, limit: int = 15) -> list[dict]:
         return []
 
 
-# ── Combined search (Twitter/X + YouTube) ────────────────────────────────────
+# ── Combined search (Twitter/X via DuckDuckGo + YouTube) ─────────────────────
 
 async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
-    """Search Twitter/X (via Nitter) + YouTube for influencer posts about keyword.
+    """Search Twitter/X (via DuckDuckGo) + YouTube for influencer posts about keyword.
+
+    Twitter/X: DuckDuckGo HTML search extracts tweet URLs; Nitter profile pages
+    fetch individual tweet content. (Nitter keyword-search RSS is dead since
+    Twitter blocked the guest API it relied on.)
+
+    YouTube: yt-dlp ytsearch returns channel/video metadata.
 
     Returns: list of dicts with keys:
       handle, content, url, published_at, platform, followers_count, profile_url
@@ -348,48 +410,15 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
         return []
 
     kw_clean = keyword.strip()
-    slug = re.sub(r"[^a-zA-Z0-9]", "", kw_clean)
-
-    tw_variants = [kw_clean]
-    if slug and not kw_clean.startswith("#") and slug.lower() != kw_clean.lower():
-        tw_variants.append(f"#{slug}")
-    if " " in kw_clean and len(kw_clean) <= 25:
-        tw_variants.append(f'"{kw_clean}"')
-
-    seen_ids: set = set()
-
-    async def fetch_nitter(session, base: str, kw: str) -> list[dict]:
-        enc = kw.replace(" ", "+").replace("#", "%23").replace("@", "%40").replace('"', "%22")
-        try:
-            r = await session.get(f"{base}/search/rss?q={enc}&f=tweets", timeout=8)
-            if r.status_code == 200 and "<item>" in r.text:
-                return _parse_nitter_rss(r.text, set())
-        except Exception as e:
-            logger.debug("Nitter %s error for '%s': %s", base, kw, e)
-        return []
+    tw_limit = max(20, limit * 2 // 3)
+    yt_limit = max(10, limit // 3)
 
     async with httpx.AsyncClient(
-        headers=_TWITTER_HEADERS, timeout=12, follow_redirects=True
+        headers=_TWITTER_HEADERS, timeout=15, follow_redirects=True
     ) as session:
-        tasks: list = []
-        tasks += [fetch_nitter(session, base, kw_clean) for base in _NITTER_INSTANCES]
-        for variant in tw_variants[1:]:
-            tasks += [fetch_nitter(session, _NITTER_INSTANCES[i], variant) for i in range(min(3, len(_NITTER_INSTANCES)))]
-        batch = await asyncio.gather(*tasks, return_exceptions=True)
-
-    twitter_results: list[dict] = []
-    for res in batch:
-        if not isinstance(res, list):
-            continue
-        for item in res:
-            tid = item.get("tweet_id", "")
-            if tid and tid not in seen_ids:
-                seen_ids.add(tid)
-                twitter_results.append(item)
-
-    # YouTube search (up to 1/3 of limit)
-    yt_limit = max(10, limit // 3)
-    youtube_results = await search_youtube_keyword(kw_clean, limit=yt_limit)
+        twitter_task = _search_duckduckgo_twitter(kw_clean, tw_limit, session)
+        yt_task = search_youtube_keyword(kw_clean, limit=yt_limit)
+        twitter_results, youtube_results = await asyncio.gather(twitter_task, yt_task)
 
     logger.info(
         "social_discovery: %d twitter + %d youtube posts for '%s'",
