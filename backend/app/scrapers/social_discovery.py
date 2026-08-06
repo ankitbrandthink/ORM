@@ -1,21 +1,20 @@
-"""Social Discovery — keyword search via nitter (Twitter/X) + Mastodon.
+"""Social Discovery — keyword search via Twitter/X (Nitter) + YouTube (yt-dlp).
 
 Searches social platforms for influencer accounts discussing a keyword, then
-classifies their stance as Pro, Anti, or Mixed toward the entity.
+classifies their stance as Pro, Anti, or Mixed.
 
-HackerNews intentionally excluded — it is a tech forum, not a social influencer
-platform. Media/news outlet handles are also filtered out so only genuine social
-media voices appear in results.
+Supported platforms: Twitter/X, YouTube.
+(Facebook/Instagram require official Meta API access with approved apps.)
 
-Data sources (no API keys required):
-  • Nitter  — Twitter/X RSS (best effort; instances sometimes down)
-  • Mastodon — mastodon.social accounts search (no auth needed)
+Media/news outlet handles and non-social URLs are filtered automatically so
+only genuine social-media voices appear in results.
 """
 from __future__ import annotations
 
 import json
 import logging
 import re
+import subprocess
 from collections import Counter
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -23,7 +22,7 @@ from typing import Optional
 
 logger = logging.getLogger("orm.social_discovery")
 
-# Twitter frontends — tried in parallel
+# ── Nitter instances (Twitter/X frontends) ────────────────────────────────────
 _NITTER_INSTANCES = [
     "https://nitter.net",
     "https://nitter.privacydev.net",
@@ -43,27 +42,24 @@ _TWITTER_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-_MASTODON_HEADERS = {
-    "User-Agent": "ORM-CMS/1.0 (social discovery bot)",
-    "Accept": "application/json",
-}
+# ── Handle-level filters ──────────────────────────────────────────────────────
 
-# Handles/usernames to always skip
 _SKIP_HANDLES = {
     "search", "hashtag", "i", "intent", "home", "explore",
     "notifications", "messages", "twitter", "x", "AutoModerator",
     "[deleted]", "deleted", "dang", "pg", "hn",
 }
 
-# Keywords in a handle that indicate a media/news outlet — exclude these
+# Substrings in a handle that signal a media/news/official account
 _MEDIA_HANDLE_KEYWORDS = {
     "news", "media", "press", "channel", "tv", "fm", "radio", "live",
     "breaking", "alert", "update", "daily", "weekly", "times", "post",
     "report", "reporter", "journal", "gazette", "herald", "tribune",
-    "review", "digest", "bulletin", "wire", "agency", "bureau",
+    "review", "digest", "bulletin", "wire", "agency", "bureau", "official",
+    "govt", "gov", "pib", "ministry", "spokesperson", "handle",
 }
 
-# Known media outlet handles to exclude explicitly
+# Explicitly known media outlet handles to block
 _KNOWN_MEDIA_HANDLES = {
     "ndtv", "bbc", "bbcnews", "bbcbreaking", "cnn", "cnni", "cnnbrk",
     "aajtak", "abpnews", "intoday", "news18", "zeenews", "zeebusiness",
@@ -77,9 +73,36 @@ _KNOWN_MEDIA_HANDLES = {
     "guardian", "nytimes", "cnbc", "aljazeera", "wionews", "republic",
     "deccanherald", "deccanchronicle", "telegraphindia", "theweek",
     "mathrubhumi", "manorama", "asianetnews", "sbnation", "espn",
+    # Tech/forum sites (not social influencers)
+    "ycombinator", "hackernews", "hn_frontpage", "producthunt",
+    "techcrunch", "theverge", "engadget", "arstechnica", "wired",
+    "medium", "substack",
 }
 
-# Stop words for keyword cluster extraction
+# ── URL-level filters (whitelist social platform domains) ─────────────────────
+
+_ALLOWED_SOCIAL_DOMAINS = {
+    "twitter.com", "x.com", "t.co",
+    "youtube.com", "youtu.be",
+    "facebook.com", "fb.com", "m.facebook.com",
+    "instagram.com",
+}
+
+
+def is_valid_social_url(url: str) -> bool:
+    """Return True if URL belongs to a known social platform (or is empty)."""
+    if not url:
+        return True
+    try:
+        from urllib.parse import urlparse
+        netloc = urlparse(url).netloc.lower().lstrip("www.").lstrip("m.")
+        return any(netloc == d or netloc.endswith("." + d) for d in _ALLOWED_SOCIAL_DOMAINS)
+    except Exception:
+        return True
+
+
+# ── Stop words for keyword cluster extraction ─────────────────────────────────
+
 _STOP_WORDS = {
     "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
     "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
@@ -90,24 +113,41 @@ _STOP_WORDS = {
     "then", "just", "also", "more", "about", "up", "out", "all", "one",
     "can", "get", "got", "its", "new", "like", "via", "how", "when", "why",
     "her", "him", "his", "them", "https", "http", "www", "rt", "amp",
-    "co", "pic", "twitter", "com", "that", "this", "very", "been", "into",
-    "over", "after", "said", "here", "there", "now", "only", "too", "even",
-    "well", "back", "any", "good", "want", "look", "think", "know", "time",
-    "year", "people", "way", "day", "man", "old", "great", "big",
+    "co", "pic", "twitter", "com", "very", "been", "into", "over", "after",
+    "said", "here", "there", "now", "only", "too", "even", "well", "back",
+    "any", "good", "want", "look", "think", "know", "time", "year", "people",
+    "way", "day", "man", "old", "great", "big", "video", "watch", "subscribe",
+    "like", "share", "comment", "channel", "youtube", "instagram", "facebook",
 }
 
+# ── Check yt-dlp availability once at import ──────────────────────────────────
+try:
+    _ytdlp_check = subprocess.run(
+        ["yt-dlp", "--version"], capture_output=True, timeout=5
+    )
+    _YTDLP_AVAILABLE = _ytdlp_check.returncode == 0
+except Exception:
+    _YTDLP_AVAILABLE = False
+
+
+# ── Utility functions ─────────────────────────────────────────────────────────
 
 def _is_media_handle(handle: str) -> bool:
-    """Return True if the handle appears to be a media/news outlet."""
-    h = handle.lower().strip("@")
-    if h in _KNOWN_MEDIA_HANDLES:
+    """Return True if the handle appears to be a media/news/official outlet."""
+    h_lower = handle.lower().strip("@")
+    # Exact match against known list
+    if h_lower in _KNOWN_MEDIA_HANDLES:
         return True
-    # Check for media keywords embedded in the handle
-    return any(kw in h for kw in _MEDIA_HANDLE_KEYWORDS)
+    # Strip non-alpha chars for keyword matching
+    h_clean = re.sub(r"[^a-z0-9]", "", h_lower)
+    if h_clean in _KNOWN_MEDIA_HANDLES:
+        return True
+    # Keyword substring check on original (preserving underscores)
+    return any(kw in h_lower for kw in _MEDIA_HANDLE_KEYWORDS)
 
 
 def extract_keyword_clusters(posts: list[dict], top_n: int = 8) -> list[str]:
-    """Extract top recurring keywords from a list of posts' content."""
+    """Extract top recurring keywords from posts' content."""
     all_text = " ".join(p.get("content", "") for p in posts).lower()
     all_text = re.sub(r"https?://\S+", " ", all_text)
     all_text = re.sub(r"[^a-zA-Z0-9#@\s]", " ", all_text)
@@ -116,14 +156,13 @@ def extract_keyword_clusters(posts: list[dict], top_n: int = 8) -> list[str]:
         for w in all_text.split()
         if len(w) > 2 and w.strip("#@") not in _STOP_WORDS and w.strip("#@").isalpha()
     ]
-    counts = Counter(words)
-    return [w for w, _ in counts.most_common(top_n)]
+    return [w for w, _ in Counter(words).most_common(top_n)]
 
 
-# ── Twitter/X via nitter ─────────────────────────────────────────────────────
+# ── Twitter/X via Nitter ──────────────────────────────────────────────────────
 
 def _parse_nitter_rss(xml_text: str, seen_ids: set) -> list[dict]:
-    """Parse nitter RSS XML and return tweet dicts (filters media handles)."""
+    """Parse Nitter RSS XML into tweet dicts; filters media handles."""
     import xml.etree.ElementTree as ET
     results = []
     try:
@@ -146,8 +185,7 @@ def _parse_nitter_rss(xml_text: str, seen_ids: set) -> list[dict]:
             m = re.search(r"/([^/]+)/status/(\d+)", link)
             if not m:
                 continue
-            handle = m.group(1)
-            tweet_id = m.group(2)
+            handle, tweet_id = m.group(1), m.group(2)
 
             if handle.lower() in _SKIP_HANDLES:
                 continue
@@ -172,48 +210,15 @@ def _parse_nitter_rss(xml_text: str, seen_ids: set) -> list[dict]:
                 "published_at": pub_at.isoformat(),
                 "platform": "twitter",
                 "followers_count": None,
+                "profile_url": f"https://x.com/{handle}",
             })
         except Exception:
             continue
     return results
 
 
-# ── Mastodon via mastodon.social accounts API ─────────────────────────────────
-
-def _parse_mastodon_accounts(json_text: str, keyword: str) -> list[dict]:
-    """Parse Mastodon accounts search response into pseudo-post dicts."""
-    results = []
-    try:
-        accounts = json.loads(json_text)
-        if not isinstance(accounts, list):
-            return []
-        for acc in accounts:
-            username = (acc.get("username") or "").strip()
-            if not username or username.lower() in _SKIP_HANDLES:
-                continue
-            if _is_media_handle(username):
-                continue
-            display_name = (acc.get("display_name") or username).strip()
-            note = re.sub(r"<[^>]+>", " ", acc.get("note") or "").strip()[:300]
-            content = f"{display_name}: {note}" if note else display_name
-            acc_url = acc.get("url") or f"https://mastodon.social/@{username}"
-            followers = acc.get("followers_count", 0) or 0
-            results.append({
-                "handle": username,
-                "tweet_id": f"masto_{username}",
-                "content": content or f"Mastodon account discussing {keyword}",
-                "url": acc_url,
-                "published_at": datetime.now(timezone.utc).isoformat(),
-                "platform": "mastodon",
-                "followers_count": followers,
-            })
-    except Exception as e:
-        logger.debug("Mastodon accounts parse error: %s", e)
-    return results
-
-
-async def _fetch_twitter_followers(handle: str, session) -> Optional[int]:
-    """Try to get Twitter follower count from a Nitter profile page."""
+async def _fetch_twitter_followers_with_session(handle: str, session) -> Optional[int]:
+    """Fetch Twitter follower count from a Nitter profile page (internal)."""
     for base in _NITTER_INSTANCES[:3]:
         try:
             r = await session.get(f"{base}/{handle}", timeout=6)
@@ -234,13 +239,107 @@ async def _fetch_twitter_followers(handle: str, session) -> Optional[int]:
     return None
 
 
-# ── Combined search ───────────────────────────────────────────────────────────
+async def fetch_twitter_followers(handle: str) -> Optional[int]:
+    """Public: fetch Twitter follower count for a handle via Nitter."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(
+            headers=_TWITTER_HEADERS, timeout=12, follow_redirects=True
+        ) as s:
+            return await _fetch_twitter_followers_with_session(handle, s)
+    except Exception:
+        return None
+
+
+# ── YouTube via yt-dlp ────────────────────────────────────────────────────────
+
+async def search_youtube_keyword(keyword: str, limit: int = 15) -> list[dict]:
+    """Search YouTube for videos about keyword using yt-dlp."""
+    if not _YTDLP_AVAILABLE:
+        logger.info("yt-dlp not available; YouTube search skipped")
+        return []
+
+    try:
+        import asyncio
+
+        def _run() -> subprocess.CompletedProcess:
+            return subprocess.run(
+                [
+                    "yt-dlp",
+                    f"ytsearch{limit}:{keyword}",
+                    "--dump-json",
+                    "--no-download",
+                    "--flat-playlist",
+                    "--no-warnings",
+                    "--quiet",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+
+        result = await asyncio.get_event_loop().run_in_executor(None, _run)
+
+        posts: list[dict] = []
+        seen_channels: set[str] = set()
+
+        for line in result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            try:
+                video = json.loads(line)
+                uploader = (video.get("uploader") or video.get("channel") or "").strip()
+                channel_id = video.get("channel_id") or video.get("uploader_id") or ""
+                vid_id = video.get("id") or ""
+                title = (video.get("title") or "").strip()
+
+                if not uploader or not vid_id or not title:
+                    continue
+                if _is_media_handle(uploader):
+                    continue
+
+                channel_key = channel_id or uploader
+                if channel_key in seen_channels:
+                    continue
+                seen_channels.add(channel_key)
+
+                handle = re.sub(r"[^a-zA-Z0-9_]", "", uploader.replace(" ", "_"))[:50] or f"yt_{vid_id[:8]}"
+                channel_url = (
+                    f"https://www.youtube.com/channel/{channel_id}"
+                    if channel_id else f"https://www.youtube.com/@{handle}"
+                )
+                followers = video.get("channel_follower_count") or None
+
+                posts.append({
+                    "handle": handle,
+                    "tweet_id": f"yt_{vid_id}",
+                    "content": title[:500],
+                    "url": f"https://www.youtube.com/watch?v={vid_id}",
+                    "published_at": datetime.now(timezone.utc).isoformat(),
+                    "platform": "youtube",
+                    "followers_count": followers,
+                    "profile_url": channel_url,
+                })
+            except Exception:
+                continue
+
+        logger.info("YouTube search: %d channels for '%s'", len(posts), keyword)
+        return posts
+
+    except Exception as e:
+        logger.debug("YouTube search error: %s", e)
+        return []
+
+
+# ── Combined search (Twitter/X + YouTube) ────────────────────────────────────
 
 async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
-    """Search Twitter/X (via nitter) + Mastodon for influencer posts about keyword.
+    """Search Twitter/X (via Nitter) + YouTube for influencer posts about keyword.
 
-    Returns list of dicts: {handle, content, url, published_at, platform, followers_count}
-    Media/news outlet handles are automatically excluded.
+    Returns: list of dicts with keys:
+      handle, content, url, published_at, platform, followers_count, profile_url
+    Platforms returned: 'twitter', 'youtube'
+    Media/news handles and non-social URLs are excluded automatically.
     """
     try:
         import asyncio
@@ -258,54 +357,27 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
         tw_variants.append(f'"{kw_clean}"')
 
     seen_ids: set = set()
-    results: list[dict] = []
 
     async def fetch_nitter(session, base: str, kw: str) -> list[dict]:
         enc = kw.replace(" ", "+").replace("#", "%23").replace("@", "%40").replace('"', "%22")
-        url = f"{base}/search/rss?q={enc}&f=tweets"
         try:
-            r = await session.get(url, timeout=8)
+            r = await session.get(f"{base}/search/rss?q={enc}&f=tweets", timeout=8)
             if r.status_code == 200 and "<item>" in r.text:
                 return _parse_nitter_rss(r.text, set())
         except Exception as e:
             logger.debug("Nitter %s error for '%s': %s", base, kw, e)
         return []
 
-    async def fetch_mastodon_accounts(session, kw: str) -> list[dict]:
-        try:
-            enc = kw.replace(" ", "+")
-            url = f"https://mastodon.social/api/v2/search?q={enc}&type=accounts&limit=20&resolve=false"
-            r = await session.get(url, timeout=10, headers=_MASTODON_HEADERS)
-            if r.status_code == 200:
-                data = json.loads(r.text)
-                accounts = data.get("accounts", [])
-                return _parse_mastodon_accounts(json.dumps(accounts), kw)
-        except Exception as e:
-            logger.debug("Mastodon accounts error for '%s': %s", kw, e)
-        return []
-
     async with httpx.AsyncClient(
         headers=_TWITTER_HEADERS, timeout=12, follow_redirects=True
     ) as session:
         tasks: list = []
-
-        # All nitter instances × primary keyword
         tasks += [fetch_nitter(session, base, kw_clean) for base in _NITTER_INSTANCES]
-
-        # Hashtag + quoted variants on first 3 nitter instances
         for variant in tw_variants[1:]:
-            tasks += [
-                fetch_nitter(session, _NITTER_INSTANCES[i], variant)
-                for i in range(min(3, len(_NITTER_INSTANCES)))
-            ]
-
-        # Mastodon
-        tasks.append(fetch_mastodon_accounts(session, kw_clean))
-        if slug and slug.lower() != kw_clean.lower():
-            tasks.append(fetch_mastodon_accounts(session, slug))
-
+            tasks += [fetch_nitter(session, _NITTER_INSTANCES[i], variant) for i in range(min(3, len(_NITTER_INSTANCES)))]
         batch = await asyncio.gather(*tasks, return_exceptions=True)
 
+    twitter_results: list[dict] = []
     for res in batch:
         if not isinstance(res, list):
             continue
@@ -313,32 +385,31 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
             tid = item.get("tweet_id", "")
             if tid and tid not in seen_ids:
                 seen_ids.add(tid)
-                results.append(item)
+                twitter_results.append(item)
 
-    twitter_results = [r for r in results if r.get("platform") == "twitter"]
-    mastodon_results = sorted(
-        [r for r in results if r.get("platform") == "mastodon"],
-        key=lambda x: x.get("followers_count") or 0,
-        reverse=True,
-    )
+    # YouTube search (up to 1/3 of limit)
+    yt_limit = max(10, limit // 3)
+    youtube_results = await search_youtube_keyword(kw_clean, limit=yt_limit)
 
     logger.info(
-        "social_discovery: %d posts for '%s' (twitter=%d, mastodon=%d)",
-        len(results), kw_clean, len(twitter_results), len(mastodon_results),
+        "social_discovery: %d twitter + %d youtube posts for '%s'",
+        len(twitter_results), len(youtube_results), kw_clean,
     )
 
-    # Interleave Twitter first, then Mastodon
+    # Interleave: 2 twitter per 1 youtube
     merged: list[dict] = []
-    ti, mi = 0, 0
-    while len(merged) < limit and (ti < len(twitter_results) or mi < len(mastodon_results)):
-        if ti < len(twitter_results):
-            merged.append(twitter_results[ti]); ti += 1
-        if mi < len(mastodon_results) and len(merged) < limit:
-            merged.append(mastodon_results[mi]); mi += 1
+    ti, yi = 0, 0
+    while len(merged) < limit and (ti < len(twitter_results) or yi < len(youtube_results)):
+        for _ in range(2):
+            if ti < len(twitter_results) and len(merged) < limit:
+                merged.append(twitter_results[ti]); ti += 1
+        if yi < len(youtube_results) and len(merged) < limit:
+            merged.append(youtube_results[yi]); yi += 1
+
     return merged
 
 
-# ── Lexicon-based stance detection ───────────────────────────────────────────
+# ── Stance classification ─────────────────────────────────────────────────────
 
 _PRO_WORDS = {
     "support", "great", "love", "best", "excellent", "jai", "proud", "zindabad",
@@ -356,7 +427,7 @@ _ANTI_WORDS = {
     "remove", "out", "failed", "useless", "pathetic", "disgrace", "exposed",
     "arrest", "jail", "fake", "propaganda", "lies", "lying", "deceptive",
     "incompetent", "terrible", "horrible", "outrage", "protest", "demand",
-    "refused", "ruthless", "authoritarian", "corrupt", "corruption",
+    "refused", "ruthless", "authoritarian", "corruption",
 }
 
 
@@ -374,12 +445,11 @@ def _lexicon_stance(text: str, keyword: str) -> str:
 async def classify_stance(tweet_content: str, keyword: str, api_key: Optional[str] = None) -> str:
     """Classify content's stance toward keyword as Pro, Anti, or Mixed.
 
-    Uses Claude Haiku when api_key is set, otherwise lexicon fallback.
+    Uses Claude Haiku when api_key is set, falls back to lexicon otherwise.
     """
     if api_key and api_key.startswith("sk-ant"):
         try:
             import httpx
-
             prompt = (
                 f'A user posted this content about "{keyword}":\n\n'
                 f'"{tweet_content[:300]}"\n\n'

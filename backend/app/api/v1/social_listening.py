@@ -5,7 +5,7 @@ GET  /social-listening/influencers     — list discovered influencers
 GET  /social-listening/keywords        — list searched keywords for a client
 DELETE /social-listening/influencers/{id}  — soft-delete one record
 
-Only Twitter/X and Mastodon sources are used. HackerNews and press/media
+Only Twitter/X and YouTube are scraped. HackerNews, Mastodon, and press/media
 outlet handles are excluded so results contain genuine social influencers only.
 """
 from __future__ import annotations
@@ -26,8 +26,12 @@ from app.models import DiscoveredInfluencer, DiscoveredPost
 from app.scrapers.social_discovery import (
     classify_stance,
     extract_keyword_clusters,
+    fetch_twitter_followers,
+    is_valid_social_url,
     search_twitter_keyword,
 )
+
+_ALLOWED_PLATFORMS = {"twitter", "youtube"}
 
 router = APIRouter(prefix="/social-listening", tags=["social-listening"])
 logger = logging.getLogger("orm.social_listening")
@@ -54,9 +58,9 @@ def _follower_tier(count: Optional[int]) -> str:
 # ── Background discovery task ────────────────────────────────────────────────
 
 async def _run_discovery(tenant_id: str, client_id: str, keyword: str, limit: int):
-    """Search Twitter/X & Mastodon for keyword, classify stance, upsert records.
+    """Search Twitter/X & YouTube for keyword, classify stance, upsert records.
 
-    Media outlet handles are already excluded by social_discovery.py.
+    Media outlet handles and non-social URLs are excluded by social_discovery.py.
     """
     db = SessionLocal()
     try:
@@ -67,17 +71,21 @@ async def _run_discovery(tenant_id: str, client_id: str, keyword: str, limit: in
 
         api_key = _get_api_key()
 
-        # Group posts by handle + platform
+        # Group posts by handle + platform (only allowed platforms)
         by_handle: dict[str, list[dict]] = {}
         for tw in tweets:
-            # Only process Twitter and Mastodon (exclude any stray HN items)
-            if tw.get("platform") not in ("twitter", "mastodon"):
+            if tw.get("platform") not in _ALLOWED_PLATFORMS:
                 continue
             key = f"{tw['handle']}::{tw.get('platform', 'twitter')}"
             by_handle.setdefault(key, []).append(tw)
 
         for handle_key, handle_posts in by_handle.items():
             handle, platform = handle_key.split("::", 1)
+
+            # Only process allowed platforms
+            if platform not in _ALLOWED_PLATFORMS:
+                continue
+
             pro = anti = neutral = 0
             classified_posts: list[dict] = []
 
@@ -99,17 +107,22 @@ async def _run_discovery(tenant_id: str, client_id: str, keyword: str, limit: in
                 overall = "Mixed"
 
             # Build profile URL
-            if platform == "mastodon":
-                profile_url = handle_posts[0].get("url") or f"https://mastodon.social/@{handle}"
+            if platform == "youtube":
+                profile_url = handle_posts[0].get("profile_url") or f"https://www.youtube.com/@{handle}"
             else:
-                profile_url = f"https://x.com/{handle}"
+                profile_url = handle_posts[0].get("profile_url") or f"https://x.com/{handle}"
 
             # Extract keyword clusters from post content
             clusters = extract_keyword_clusters(handle_posts, top_n=8)
             clusters_json = json.dumps(clusters)
 
-            # Followers count (Mastodon provides it; Twitter is best-effort None)
+            # Followers count — YouTube provides it; Twitter needs a Nitter profile fetch
             followers_count = handle_posts[0].get("followers_count")
+            if followers_count is None and platform == "twitter":
+                try:
+                    followers_count = await fetch_twitter_followers(handle)
+                except Exception:
+                    pass
 
             # Upsert influencer
             inf = db.query(DiscoveredInfluencer).filter(
@@ -226,6 +239,7 @@ async def get_discovered_influencers(
         DiscoveredInfluencer.tenant_id == current_user.tenant_id,
         DiscoveredInfluencer.client_id == client_id,
         DiscoveredInfluencer.is_deleted == False,
+        DiscoveredInfluencer.platform.in_(list(_ALLOWED_PLATFORMS)),
     )
     if keyword:
         q = q.filter(DiscoveredInfluencer.keyword == keyword)
@@ -278,6 +292,7 @@ async def get_discovered_influencers(
                     "published_at": p.published_at.isoformat() if p.published_at else None,
                 }
                 for p in posts
+                if is_valid_social_url(p.post_url)  # exclude non-social URLs (HN, blogs, etc.)
             ],
         })
 
