@@ -123,6 +123,11 @@ async def _run_sync(job_id: str, profile, api_key: str | None,
         profile = fresh
         _persist(db, profile, stage="running")
 
+        # Wipe stale estimated posts so re-sync generates fresh diverse content.
+        # Only wipe estimated data — never touch profiles that have real scraped posts.
+        if (profile.meta or {}).get("data_source") == "estimated":
+            _wipe_profile_posts(db, profile_id)
+
         platform = (profile.platform or "").lower()
         posts_fetched: list = []
         adapter = None
@@ -423,6 +428,8 @@ def _generate_fallback_posts(profile: SocialProfile, days: int, max_posts: int):
 
     Content is tailored to the platform and inferred from the profile handle/name.
     These posts are always labelled data_source='estimated' so the UI can show a badge.
+    Captions are drawn from three sentiment buckets so heuristic_post() detects
+    varied sentiment, producing realistic comment distributions per post.
     """
     from app.scrapers.base_adapter import NormalizedPost
     import random
@@ -442,29 +449,88 @@ def _generate_fallback_posts(profile: SocialProfile, days: int, max_posts: int):
     }
     base_url = profile_urls.get(platform, f"https://www.{platform}.com/{handle}")
 
-    # Richer content pool — varied enough to look realistic
-    captions = [
-        f"Addressing key issues that matter most to our community. Your trust drives us forward. 🙏",
-        f"Important update from {display}: New initiatives are underway for sustainable development.",
-        f"Met with citizens today and heard their concerns firsthand. Every voice matters.",
-        f"Progress update: Infrastructure projects are on track. Better days ahead! 💪",
-        f"Proud to announce a new initiative that will transform lives across the region.",
-        f"Grateful for the overwhelming support from the people. Together we move forward.",
-        f"Working tirelessly every single day to deliver on our promises to you.",
-        f"Strengthening our commitment to public welfare and accountability.",
-        f"A productive day of meetings and decisions that will shape our future.",
-        f"New milestone achieved! Thank you for believing in our vision for progress.",
-        f"Listening is the foundation of good governance. Your feedback shapes our policies.",
-        f"Community development is not just a promise — it's a daily commitment.",
-        f"Another day, another step forward for the people we serve. 🌟",
-        f"Reflecting on our journey and reaffirming our dedication to public service.",
-        f"Exciting news: A major project has just received the green light. Stay tuned!",
+    # Positive captions — trigger heuristic_post Positive sentiment
+    captions_pos = [
+        f"Proud to announce the completion of our new community hospital! This milestone is dedicated to the people. 🎉",
+        f"Amazing turnout at today's development launch — thousands of families will benefit directly. Thank you! 👏",
+        f"Celebrating a record achievement: our committed team delivered this project six weeks ahead of schedule! 💪",
+        f"Outstanding progress on the infrastructure upgrade — 95% complete and on budget. Delivering for you! 🙌",
+        f"Grateful for the overwhelming support as we inaugurate the new solar energy plant. Progress for all! 🌟",
+        f"Breaking: major investment approved for our region. Committed to transforming lives across every community. ✅",
+        f"Congratulations to the hundreds of youth who received scholarships this year! Education is the greatest investment. 🎓",
+        f"Proud to have launched the largest affordable housing programme in our history today. Forward ever! 🏠",
+        f"Thrilled to share: unemployment dropped to a historic low this quarter. Real progress, real results!",
+        f"Honored to receive recognition for our governance achievements. This belongs to the people. 🙏",
+        f"Committed to excellence: our education budget has grown 40% in three years. Your children are our priority.",
+        f"Celebrating five years of uninterrupted services reaching remote communities — a true milestone! ⚡",
+        f"Our healthcare initiative has served 200,000 people this year. Transformation is real and ongoing. 💊",
+        f"Proud to inaugurate the new sports complex for our youth. Investing in the next generation! 🏟️",
+        f"Best year yet for economic growth — GDP hitting record highs! Development reaching every corner. 📈",
+        f"Delivering on promises: the new bridge officially open, connecting communities that waited too long! 🌉",
+        f"Outstanding work by our teams — 95% of affected families resettled within 30 days. Proud of this! 💪",
+        f"Grateful for the trust of the people. Together, we achieved what others said was impossible. 🙌",
+        f"Breaking ground on the new university campus today — education is our foundation for the future. 🎓",
+        f"Excellent results from the annual review — services improved across 8 key sectors. Thank you all! ✨",
     ]
+
+    # Crisis/controversy captions — trigger heuristic_post Negative sentiment
+    captions_neg = [
+        f"Addressing the flood crisis in our region — emergency response teams have been deployed immediately.",
+        f"I hear your concerns about the corruption allegations. An independent investigation is now underway.",
+        f"Responding to the protest movements: your voices are valid. Accountability is non-negotiable.",
+        f"The recent violence in our community is deeply concerning. Emergency security measures are being implemented.",
+        f"Acknowledging the criticism about the infrastructure delays — we failed this deadline and will do better.",
+        f"A tragedy struck our community today. I am personally overseeing the emergency disaster response.",
+        f"The unemployment crisis requires urgent action. Announcing new policy measures effective immediately.",
+        f"Addressing the inflation crisis head-on — cost of living relief measures will be implemented this week.",
+        f"An honest conversation about our failures: we did not deliver on this promise and I take full responsibility.",
+        f"The crime wave affecting our streets demands immediate action — security forces deployed across affected areas.",
+        f"Responding to the fraud allegations — full transparency, full accountability. Truth will prevail.",
+        f"The disaster that struck our communities is a wake-up call. Disaster preparedness is now top priority.",
+        f"I acknowledge the protest demands. Meeting with community leaders this week to address every concern.",
+        f"Urgent: critical infrastructure failure affecting tens of thousands of residents. Crews working round the clock.",
+        f"The boycott of our programmes is counterproductive. The people need solutions, not political obstruction.",
+        f"Addressing the investigation head-on — I welcome full scrutiny. We have nothing to hide.",
+        f"The flooding crisis has displaced thousands — declaring a state of emergency in all affected regions.",
+        f"An incident occurred that demands accountability. Investigations are underway — no cover-up will be tolerated.",
+        f"Our health system is under severe strain — demanding accountability and announcing emergency measures now.",
+        f"Concerning report released today about service delivery failures. We are taking immediate corrective action.",
+    ]
+
+    # Neutral/informational captions — trigger heuristic_post Neutral sentiment
+    captions_neu = [
+        f"Community meeting scheduled for Thursday at 6 PM. Your input shapes our decisions.",
+        f"Update: Phase 2 of the highway project resumes next week. Timeline remains on track.",
+        f"Annual budget review underway. Stakeholder consultations open until end of month.",
+        f"New policy guidelines published today. Read the full document at our official website.",
+        f"Attended the regional summit on sustainable development. Important conversations happening.",
+        f"Cabinet meeting concluded. A full briefing will be released tomorrow morning.",
+        f"Reminder: public consultations on the new zoning regulations close this Friday.",
+        f"Monthly infrastructure update: see the progress report for all ongoing projects.",
+        f"Attended the graduation ceremony today. Congratulating the graduating class. 🎓",
+        f"Quarterly economic report released. Key indicators published for public review.",
+        f"Town hall meeting next Tuesday — registration opens at 9 AM. All are welcome.",
+        f"International delegation visiting this week for partnership discussions on trade.",
+        f"Environmental assessment for the new port project is now complete. Next steps announced.",
+        f"Met with local business leaders today to discuss economic development opportunities.",
+        f"Public notice: road maintenance work scheduled in several districts this weekend.",
+        f"The annual national census begins next month. Your participation matters.",
+        f"Healthcare access update: new clinics will open across rural areas by December.",
+        f"Working with regional leaders on coordinated development planning for the next five years.",
+        f"Reminder to check the official website for all verified announcements and updates.",
+        f"Attended the inter-ministerial coordination meeting. Progress reports reviewed and noted.",
+    ]
+
+    all_captions = captions_pos + captions_neg + captions_neu
 
     now = datetime.now(timezone.utc)
     n = min(max_posts, days)
     seed = int(hashlib.md5(f"{handle}:{platform}".encode()).hexdigest()[:8], 16)
     rng = random.Random(seed)
+
+    # Shuffle so each profile gets a unique caption ordering
+    shuffled = list(all_captions)
+    rng.shuffle(shuffled)
 
     posts = []
     for i in range(n):
@@ -478,7 +544,7 @@ def _generate_fallback_posts(profile: SocialProfile, days: int, max_posts: int):
         posts.append(NormalizedPost(
             external_id=f"est_{handle}_{i}_{seed}",
             source_kind=platform,
-            content=captions[i % len(captions)],
+            content=shuffled[i % len(shuffled)],
             author=handle,
             url=base_url,
             published_at=post_date,

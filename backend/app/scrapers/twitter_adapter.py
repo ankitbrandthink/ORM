@@ -19,9 +19,15 @@ logger = logging.getLogger("orm.twitter")
 
 _NITTER_INSTANCES = [
     "https://nitter.privacydev.net",
+    "https://nitter.poast.org",
+    "https://nitter.1d4.us",
+    "https://nitter.moomoo.me",
     "https://nitter.net",
     "https://nitter.cz",
     "https://nitter.unixfox.eu",
+    "https://nitter.tiekoetter.com",
+    "https://nitter.kavin.rocks",
+    "https://nitter.fdn.fr",
 ]
 
 _RSS_HEADERS = {
