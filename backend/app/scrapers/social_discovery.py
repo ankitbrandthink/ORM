@@ -1,13 +1,11 @@
-"""Social Discovery — keyword search via Twitter/X (Nitter) + YouTube (yt-dlp).
+"""Social Discovery — keyword search via Bing/Nitter/DuckDuckGo + YouTube (yt-dlp).
 
-Searches social platforms for influencer accounts discussing a keyword, then
-classifies their stance as Pro, Anti, or Mixed.
+Twitter/X search chain: Bing HTML → Nitter keyword search → DuckDuckGo HTML.
+YouTube: yt-dlp ytsearch with relaxed channel-name filtering (only blocks
+explicitly known media handles, not keyword substrings like "live"/"daily").
 
-Supported platforms: Twitter/X, YouTube.
-(Facebook/Instagram require official Meta API access with approved apps.)
-
-Media/news outlet handles and non-social URLs are filtered automatically so
-only genuine social-media voices appear in results.
+Media/news outlet handles are filtered automatically so only genuine social
+voices appear in results. Facebook/Instagram require official API access.
 """
 from __future__ import annotations
 
@@ -18,6 +16,7 @@ import subprocess
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import quote_plus
 
 logger = logging.getLogger("orm.social_discovery")
 
@@ -41,6 +40,14 @@ _TWITTER_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
+_BING_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+}
+
 # ── Handle-level filters ──────────────────────────────────────────────────────
 
 _SKIP_HANDLES = {
@@ -49,7 +56,9 @@ _SKIP_HANDLES = {
     "[deleted]", "deleted", "dang", "pg", "hn",
 }
 
-# Substrings in a handle that signal a media/news/official account
+# Substrings in a Twitter *handle* (short slug) that signal media/news accounts.
+# NOTE: do NOT apply this to YouTube channel display names — they legitimately
+# contain words like "channel", "live", "daily", "update".
 _MEDIA_HANDLE_KEYWORDS = {
     "news", "media", "press", "channel", "tv", "fm", "radio", "live",
     "breaking", "alert", "update", "daily", "weekly", "times", "post",
@@ -58,7 +67,7 @@ _MEDIA_HANDLE_KEYWORDS = {
     "govt", "gov", "pib", "ministry", "spokesperson", "handle",
 }
 
-# Explicitly known media outlet handles to block
+# Explicitly known media outlet handles / display-names to block on all platforms
 _KNOWN_MEDIA_HANDLES = {
     "ndtv", "bbc", "bbcnews", "bbcbreaking", "cnn", "cnni", "cnnbrk",
     "aajtak", "abpnews", "intoday", "news18", "zeenews", "zeebusiness",
@@ -72,6 +81,12 @@ _KNOWN_MEDIA_HANDLES = {
     "guardian", "nytimes", "cnbc", "aljazeera", "wionews", "republic",
     "deccanherald", "deccanchronicle", "telegraphindia", "theweek",
     "mathrubhumi", "manorama", "asianetnews", "sbnation", "espn",
+    "france24", "dw", "dworldnews", "voanews", "rferl", "abc", "nbc", "cbs",
+    "foxnews", "skynews", "euronews", "rt", "xinhua", "cgtn", "nhk",
+    "abcnews", "nbcnews", "cbsnews", "msnbc",
+    # Indian regional & Hindi news
+    "lallantop", "navjivanindia", "newsncr", "newsnation", "thenewsminute",
+    "thelogicalindian", "storypick", "swarajyamag", "opindia",
     # Tech/forum sites (not social influencers)
     "ycombinator", "hackernews", "hn_frontpage", "producthunt",
     "techcrunch", "theverge", "engadget", "arstechnica", "wired",
@@ -119,31 +134,58 @@ _STOP_WORDS = {
     "like", "share", "comment", "channel", "youtube", "instagram", "facebook",
 }
 
-# ── Locate yt-dlp binary (handles restricted systemd PATH) ────────────────────
-_YTDLP_PATH: Optional[str] = None
-for _ytdlp_candidate in ["yt-dlp", "/usr/local/bin/yt-dlp", "/usr/bin/yt-dlp"]:
-    try:
-        if subprocess.run([_ytdlp_candidate, "--version"], capture_output=True, timeout=5).returncode == 0:
-            _YTDLP_PATH = _ytdlp_candidate
-            break
-    except Exception:
-        continue
+
+# ── yt-dlp binary detection (lazy + module-level) ────────────────────────────
+
+def _find_ytdlp() -> Optional[str]:
+    """Locate yt-dlp binary, trying common paths. Returns path or None."""
+    for candidate in [
+        "/usr/local/bin/yt-dlp",
+        "/usr/bin/yt-dlp",
+        "yt-dlp",
+        "/home/www-data/.local/bin/yt-dlp",
+        "/root/.local/bin/yt-dlp",
+    ]:
+        try:
+            r = subprocess.run(
+                [candidate, "--version"],
+                capture_output=True, timeout=8,
+            )
+            if r.returncode == 0:
+                logger.info("social_discovery: yt-dlp found at %s", candidate)
+                return candidate
+        except Exception:
+            continue
+    return None
+
+
+# Module-level probe (best-effort; falls back to per-call detection in search_youtube_keyword)
+_YTDLP_PATH: Optional[str] = _find_ytdlp()
 _YTDLP_AVAILABLE = _YTDLP_PATH is not None
 
 
 # ── Utility functions ─────────────────────────────────────────────────────────
 
-def _is_media_handle(handle: str) -> bool:
-    """Return True if the handle appears to be a media/news/official outlet."""
+def _is_media_handle(handle: str, strict: bool = False) -> bool:
+    """Return True if the handle/name appears to be a media/news/official outlet.
+
+    strict=True  — only check against the explicit _KNOWN_MEDIA_HANDLES set.
+                   Use for YouTube channel *display names* which legitimately
+                   contain words like 'channel', 'live', 'daily', 'update'.
+    strict=False — also check _MEDIA_HANDLE_KEYWORDS substrings (for Twitter
+                   short-handles where those words are reliable signals).
+    """
     h_lower = handle.lower().strip("@")
-    # Exact match against known list
+    # Exact match
     if h_lower in _KNOWN_MEDIA_HANDLES:
         return True
-    # Strip non-alpha chars for keyword matching
+    # Strip non-alpha chars for normalised check
     h_clean = re.sub(r"[^a-z0-9]", "", h_lower)
     if h_clean in _KNOWN_MEDIA_HANDLES:
         return True
-    # Keyword substring check on original (preserving underscores)
+    if strict:
+        return False
+    # Substring keyword check (Twitter handles only)
     return any(kw in h_lower for kw in _MEDIA_HANDLE_KEYWORDS)
 
 
@@ -160,42 +202,173 @@ def extract_keyword_clusters(posts: list[dict], top_n: int = 8) -> list[str]:
     return [w for w, _ in Counter(words).most_common(top_n)]
 
 
-# ── Twitter/X via DuckDuckGo + Nitter tweet pages ────────────────────────────
+# ── Bing HTML search for Twitter/X (primary) ─────────────────────────────────
 
-def _parse_nitter_tweet_page(html: str, handle: str, tweet_id: str) -> Optional[str]:
-    """Extract tweet content from a Nitter single-tweet HTML page."""
-    try:
-        m = re.search(r'<div[^>]*class="[^"]*tweet-content[^"]*"[^>]*>(.*?)</div>', html, re.DOTALL)
-        if m:
-            raw = re.sub(r"<[^>]+>", " ", m.group(1))
-            raw = re.sub(r"\s+", " ", raw).strip()
-            if len(raw) > 10:
-                return raw[:500]
-    except Exception:
-        pass
-    return None
+async def _search_bing_twitter(keyword: str, limit: int, session) -> list[dict]:
+    """Search Bing for Twitter/X handles/posts about keyword.
 
+    Bing is less aggressive about blocking datacenter IPs than DuckDuckGo.
+    Extracts tweet URLs and profile handles from Bing search result HTML.
+    """
+    from html import unescape
 
-async def _fetch_tweet_content(handle: str, tweet_id: str, session) -> Optional[str]:
-    """Fetch a single tweet's text from Nitter profile pages."""
-    for base in _NITTER_INSTANCES[:4]:
+    results: list[dict] = []
+    seen_ids: set = set()
+
+    queries = [
+        f'site:twitter.com "{keyword}"',
+        f'site:x.com "{keyword}"',
+        f'site:twitter.com {keyword}',
+    ]
+
+    tweet_pattern = re.compile(
+        r'https?://(?:twitter\.com|x\.com)/([A-Za-z0-9_]{1,50})/status/(\d{5,25})'
+    )
+
+    for query in queries:
+        if len(results) >= limit:
+            break
         try:
-            r = await session.get(f"{base}/{handle}/status/{tweet_id}", timeout=8)
-            if r.status_code == 200:
-                content = _parse_nitter_tweet_page(r.text, handle, tweet_id)
-                if content:
-                    return content
-        except Exception:
-            continue
-    return None
+            url = f"https://www.bing.com/search?q={quote_plus(query)}&count=50&setlang=en-US"
+            r = await session.get(url, headers=_BING_HEADERS, timeout=15)
+            if r.status_code not in (200, 202):
+                logger.debug("Bing returned %d for '%s'", r.status_code, query)
+                continue
 
+            html = r.text
+            for handle, tweet_id in tweet_pattern.findall(html):
+                if len(results) >= limit:
+                    break
+                if handle.lower() in _SKIP_HANDLES:
+                    continue
+                if _is_media_handle(handle):
+                    continue
+                if tweet_id in seen_ids:
+                    continue
+                seen_ids.add(tweet_id)
+
+                snippet = ""
+                url_pos = html.find(f"/{handle}/status/{tweet_id}")
+                if url_pos >= 0:
+                    nearby = html[max(0, url_pos - 300):url_pos + 600]
+                    snippet = re.sub(r"<[^>]+>", " ", nearby)
+                    snippet = re.sub(r"\s+", " ", snippet).strip()
+                    snippet = unescape(snippet)[:400]
+                if not snippet or len(snippet) < 15:
+                    snippet = f"Post about {keyword}"
+
+                results.append({
+                    "handle": handle,
+                    "tweet_id": tweet_id,
+                    "content": snippet,
+                    "url": f"https://x.com/{handle}/status/{tweet_id}",
+                    "published_at": datetime.now(timezone.utc).isoformat(),
+                    "platform": "twitter",
+                    "followers_count": None,
+                    "profile_url": f"https://x.com/{handle}",
+                })
+
+        except Exception as e:
+            logger.debug("Bing search error for '%s': %s", query, e)
+            continue
+
+    logger.info("Bing: %d results for '%s'", len(results), keyword)
+    return results
+
+
+# ── Nitter keyword search (secondary Twitter source) ─────────────────────────
+
+async def _search_nitter_keyword(keyword: str, limit: int, session) -> list[dict]:
+    """Search Nitter instances for tweets about keyword.
+
+    Tries multiple Nitter instances and search paths. Returns as soon as one
+    instance yields results.
+    """
+    results: list[dict] = []
+    seen_ids: set = set()
+
+    tweet_url_pattern = re.compile(
+        r'href="/([A-Za-z0-9_]{1,50})/status/(\d{5,25})"'
+    )
+    content_pattern = re.compile(
+        r'<div[^>]*class="[^"]*tweet-content[^"]*"[^>]*>(.*?)</div>',
+        re.DOTALL,
+    )
+
+    search_paths = [
+        f"/search?q={quote_plus(keyword)}&f=tweets",
+        f"/search?q={quote_plus(keyword)}",
+    ]
+
+    for base in _NITTER_INSTANCES:
+        if len(results) >= limit:
+            break
+        for path in search_paths:
+            try:
+                r = await session.get(
+                    f"{base}{path}",
+                    headers=_TWITTER_HEADERS,
+                    timeout=12,
+                )
+                if r.status_code != 200:
+                    continue
+
+                html = r.text
+                if "tweet-content" not in html and "timeline-item" not in html:
+                    continue
+
+                handles_ids = tweet_url_pattern.findall(html)
+                contents = content_pattern.findall(html)
+
+                for i, (handle, tweet_id) in enumerate(handles_ids):
+                    if len(results) >= limit:
+                        break
+                    if handle.lower() in _SKIP_HANDLES:
+                        continue
+                    if _is_media_handle(handle):
+                        continue
+                    if tweet_id in seen_ids:
+                        continue
+                    seen_ids.add(tweet_id)
+
+                    content = ""
+                    if i < len(contents):
+                        content = re.sub(r"<[^>]+>", " ", contents[i])
+                        content = re.sub(r"\s+", " ", content).strip()[:400]
+                    if not content:
+                        content = f"Tweet about {keyword}"
+
+                    results.append({
+                        "handle": handle,
+                        "tweet_id": tweet_id,
+                        "content": content,
+                        "url": f"https://x.com/{handle}/status/{tweet_id}",
+                        "published_at": datetime.now(timezone.utc).isoformat(),
+                        "platform": "twitter",
+                        "followers_count": None,
+                        "profile_url": f"https://x.com/{handle}",
+                    })
+
+                if results:
+                    logger.info(
+                        "Nitter (%s): %d results for '%s'", base, len(results), keyword
+                    )
+                    break
+
+            except Exception as e:
+                logger.debug("Nitter (%s%s) error for '%s': %s", base, path, keyword, e)
+                continue
+
+        if results:
+            break
+
+    return results
+
+
+# ── DuckDuckGo HTML search (fallback, often blocked from datacenter IPs) ─────
 
 async def _search_duckduckgo_twitter(keyword: str, limit: int, session) -> list[dict]:
-    """Search DuckDuckGo HTML for Twitter/X posts about keyword.
-
-    Extracts tweet URLs from search results; fetches content via Nitter for
-    tweets where DuckDuckGo provides no snippet.
-    """
+    """Search DuckDuckGo HTML for Twitter/X posts about keyword (fallback)."""
     from html import unescape
 
     results: list[dict] = []
@@ -215,6 +388,8 @@ async def _search_duckduckgo_twitter(keyword: str, limit: int, session) -> list[
         "DNT": "1",
     }
 
+    url_pattern = r'https?://(?:twitter\.com|x\.com)/([A-Za-z0-9_]{1,50})/status/(\d{5,25})'
+
     for query in queries:
         if len(results) >= limit:
             break
@@ -228,10 +403,7 @@ async def _search_duckduckgo_twitter(keyword: str, limit: int, session) -> list[
                 continue
 
             html = r.text
-            url_pattern = r'https?://(?:twitter\.com|x\.com)/([A-Za-z0-9_]{1,50})/status/(\d{5,25})'
-            matches = re.findall(url_pattern, html)
-
-            for handle, tweet_id in matches:
+            for handle, tweet_id in re.findall(url_pattern, html):
                 if len(results) >= limit:
                     break
                 if handle.lower() in _SKIP_HANDLES:
@@ -242,7 +414,6 @@ async def _search_duckduckgo_twitter(keyword: str, limit: int, session) -> list[
                     continue
                 seen_ids.add(tweet_id)
 
-                # Extract nearby text snippet from DDG result HTML
                 snippet = ""
                 url_pos = html.find(f"/{handle}/status/{tweet_id}")
                 if url_pos >= 0:
@@ -250,7 +421,6 @@ async def _search_duckduckgo_twitter(keyword: str, limit: int, session) -> list[
                     snippet = re.sub(r"<[^>]+>", " ", nearby)
                     snippet = re.sub(r"\s+", " ", snippet).strip()
                     snippet = unescape(snippet)[:400]
-
                 if not snippet or len(snippet) < 15:
                     snippet = f"Post about {keyword}"
 
@@ -272,6 +442,8 @@ async def _search_duckduckgo_twitter(keyword: str, limit: int, session) -> list[
     logger.info("DuckDuckGo: %d tweets found for '%s'", len(results), keyword)
     return results
 
+
+# ── Nitter profile follower count ─────────────────────────────────────────────
 
 async def _fetch_twitter_followers_with_session(handle: str, session) -> Optional[int]:
     """Fetch Twitter follower count from a Nitter profile page (internal)."""
@@ -310,8 +482,16 @@ async def fetch_twitter_followers(handle: str) -> Optional[int]:
 # ── YouTube via yt-dlp ────────────────────────────────────────────────────────
 
 async def search_youtube_keyword(keyword: str, limit: int = 15) -> list[dict]:
-    """Search YouTube for videos about keyword using yt-dlp."""
-    if not _YTDLP_AVAILABLE:
+    """Search YouTube for videos about keyword using yt-dlp.
+
+    Channel display names are filtered against _KNOWN_MEDIA_HANDLES only
+    (strict mode) — keyword substrings like 'channel', 'live', 'daily' are
+    intentionally NOT used for YouTube because many legitimate political
+    commentary channels contain these words in their display name.
+    """
+    # Lazy detection: if module-level probe failed, retry here
+    ytdlp_path = _YTDLP_PATH or _find_ytdlp()
+    if not ytdlp_path:
         logger.info("yt-dlp not available; YouTube search skipped")
         return []
 
@@ -321,7 +501,7 @@ async def search_youtube_keyword(keyword: str, limit: int = 15) -> list[dict]:
         def _run() -> subprocess.CompletedProcess:
             return subprocess.run(
                 [
-                    _YTDLP_PATH,
+                    ytdlp_path,
                     f"ytsearch{limit}:{keyword}",
                     "--dump-json",
                     "--no-download",
@@ -331,7 +511,7 @@ async def search_youtube_keyword(keyword: str, limit: int = 15) -> list[dict]:
                 ],
                 capture_output=True,
                 text=True,
-                timeout=45,
+                timeout=60,
             )
 
         result = await asyncio.get_event_loop().run_in_executor(None, _run)
@@ -351,7 +531,11 @@ async def search_youtube_keyword(keyword: str, limit: int = 15) -> list[dict]:
 
                 if not uploader or not vid_id or not title:
                     continue
-                if _is_media_handle(uploader):
+
+                # strict=True: only block explicitly known media outlets,
+                # not keyword matches on display names
+                if _is_media_handle(uploader, strict=True):
+                    logger.debug("YouTube: skipping known media '%s'", uploader)
                     continue
 
                 channel_key = channel_id or uploader
@@ -387,21 +571,22 @@ async def search_youtube_keyword(keyword: str, limit: int = 15) -> list[dict]:
         return []
 
 
-# ── Combined search (Twitter/X via DuckDuckGo + YouTube) ─────────────────────
+# ── Combined search: Bing → Nitter → DDG (Twitter) + yt-dlp (YouTube) ────────
 
 async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
-    """Search Twitter/X (via DuckDuckGo) + YouTube for influencer posts about keyword.
+    """Search Twitter/X + YouTube for influencer posts about keyword.
 
-    Twitter/X: DuckDuckGo HTML search extracts tweet URLs; Nitter profile pages
-    fetch individual tweet content. (Nitter keyword-search RSS is dead since
-    Twitter blocked the guest API it relied on.)
+    Twitter/X source chain (stops when enough results found):
+      1. Bing HTML search  — least blocked from datacenter IPs
+      2. Nitter keyword search — direct Twitter frontend scrape
+      3. DuckDuckGo HTML  — often blocked but kept as last resort
 
-    YouTube: yt-dlp ytsearch returns channel/video metadata.
+    YouTube:
+      yt-dlp ytsearch with strict (known-list-only) media filtering so
+      legitimate political commentary channels are not excluded.
 
-    Returns: list of dicts with keys:
+    Returns list of dicts with keys:
       handle, content, url, published_at, platform, followers_count, profile_url
-    Platforms returned: 'twitter', 'youtube'
-    Media/news handles and non-social URLs are excluded automatically.
     """
     try:
         import asyncio
@@ -416,9 +601,29 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
     async with httpx.AsyncClient(
         headers=_TWITTER_HEADERS, timeout=15, follow_redirects=True
     ) as session:
-        twitter_task = _search_duckduckgo_twitter(kw_clean, tw_limit, session)
+        # Run YouTube in parallel with the first Twitter search attempt
+        bing_task = _search_bing_twitter(kw_clean, tw_limit, session)
         yt_task = search_youtube_keyword(kw_clean, limit=yt_limit)
-        twitter_results, youtube_results = await asyncio.gather(twitter_task, yt_task)
+        twitter_results, youtube_results = await asyncio.gather(bing_task, yt_task)
+
+        # Fallback 1: Nitter — if Bing gave fewer than half the needed results
+        if len(twitter_results) < tw_limit // 2:
+            remaining = tw_limit - len(twitter_results)
+            logger.info(
+                "Bing gave %d/%d results; trying Nitter for '%s'",
+                len(twitter_results), tw_limit, kw_clean,
+            )
+            nitter_results = await _search_nitter_keyword(kw_clean, remaining, session)
+            twitter_results.extend(nitter_results)
+
+        # Fallback 2: DuckDuckGo — last resort
+        if len(twitter_results) < 5:
+            remaining = tw_limit - len(twitter_results)
+            logger.info(
+                "Nitter gave insufficient results; trying DuckDuckGo for '%s'", kw_clean
+            )
+            ddg_results = await _search_duckduckgo_twitter(kw_clean, remaining, session)
+            twitter_results.extend(ddg_results)
 
     logger.info(
         "social_discovery: %d twitter + %d youtube posts for '%s'",
