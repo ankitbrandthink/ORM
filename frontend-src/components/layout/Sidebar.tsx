@@ -5,7 +5,7 @@ import { useState } from "react";
 import {
   LayoutDashboard, Radio, BarChart3, FileText, Building2, Settings, ChevronLeft,
   Upload, BellRing, CalendarDays, Users, Layers, Rss, MonitorCheck, MessageSquare,
-  CreditCard, FileBarChart2, Star, Brain,
+  CreditCard, FileBarChart2, Star, Brain, TableProperties,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -17,8 +17,8 @@ const NAV = [
   { href: "/press", label: "Press Sources", desc: "RSS feeds & news channels", icon: Rss },
   { href: "/influencers", label: "Influencer Map", desc: "Pro/anti voices by account", icon: Star },
   { href: "/orm", label: "ORM Queue", desc: "Reply & ticket management", icon: MessageSquare },
-  { href: "/reports/daily", label: "Daily Reports", desc: "EOD & sentiment per client", icon: CalendarDays },
-  { href: "/reports/eod", label: "EOD Report", desc: "Comment deployment reports — per-client PDF", icon: FileBarChart2 },
+  { href: "/reports/daily", label: "Daily & EOD Reports", desc: "Sentiment + comment deployment per client", icon: CalendarDays },
+  { href: "/reports/seeding", label: "Seeding Report", desc: "Sheet-linked deployment & sentiment tracker", icon: TableProperties },
   { href: "/reports", label: "Reports", desc: "Download & share PDFs", icon: FileText },
   { href: "/import", label: "Import Data", desc: "Google Sheets & CSV", icon: Upload },
   { href: "/admin/alerts", label: "WA Alerts", desc: "WhatsApp notifications", icon: BellRing },
