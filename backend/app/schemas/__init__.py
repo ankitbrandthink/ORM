@@ -11,6 +11,15 @@ class LoginRequest(BaseModel):
     recaptcha_token: Optional[str] = None
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
 class SignupRequest(BaseModel):
     email: str
     full_name: str

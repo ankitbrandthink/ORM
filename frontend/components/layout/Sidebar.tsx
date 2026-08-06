@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
-  LayoutDashboard, Radio, Ticket, BarChart3, FileText, Building2, Settings, ChevronLeft, Upload, BellRing, CalendarDays, Users, RefreshCw, Layers, Newspaper, TableProperties, Zap, ShieldCheck,
+  LayoutDashboard, Radio, BarChart3, FileText, Building2, Settings, ChevronLeft, Upload, BellRing, CalendarDays, Users, Layers, Newspaper, TableProperties, Zap, ShieldCheck, ClipboardList, Star, Rss, CreditCard, Brain, MonitorCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -12,16 +12,22 @@ const NAV = [
   { href: "/admin/clients", label: "Clients & Accounts", desc: "Add brands & social pages", icon: Building2 },
   { href: "/listening", label: "Posts & Comments", desc: "Add post links & read sentiment", icon: Radio },
   { href: "/analytics", label: "Social Insights", desc: "Narrative briefing & trends", icon: BarChart3 },
-  { href: "/admin/press-sources", label: "Press Sources", desc: "RSS feeds & news channels", icon: Newspaper },
+  { href: "/press", label: "Press & News Feed", desc: "RSS news feed + source management", icon: Rss },
+  { href: "/admin/press-sources", label: "Press Sources (Admin)", desc: "Configure RSS feeds & channels", icon: Newspaper },
+  { href: "/influencers", label: "Influencer Map", desc: "Pro/anti voices by keyword", icon: Star },
   { href: "/reports/daily", label: "Daily Reports", desc: "EOD & sentiment per client", icon: CalendarDays },
-  { href: "/reports/seeding", label: "EOD Report", desc: "Comment deployment reports → per-client PDF", icon: TableProperties },
+  { href: "/reports/eod", label: "EOD Report", desc: "Comment deployment reports → per-client PDF", icon: TableProperties },
+  { href: "/reports/seeding", label: "Seeding Report", desc: "Comment deployment reports", icon: TableProperties },
   { href: "/reports", label: "Reports", desc: "Download & share PDFs", icon: FileText },
   { href: "/import", label: "Import Data", desc: "Google Sheets & CSV", icon: Upload },
   { href: "/admin/alerts", label: "WA Alerts", desc: "WhatsApp notifications", icon: BellRing },
   { href: "/admin/contacts", label: "Alert Contacts", desc: "Who gets notified", icon: Users },
   { href: "/admin/settings/social-sync", label: "Social Sync", desc: "Auto-fetch posts & comments", icon: Layers },
-  { href: "/admin/usage", label: "API Usage & Billing", desc: "Claude token consumption & cost", icon: Zap },
-  { href: "/admin/sessions", label: "Active Sessions", desc: "Devices & login locations", icon: ShieldCheck },
+  { href: "/admin/settings/ai-models", label: "AI Model Settings", desc: "Connect Claude, Groq, Gemini, GPT", icon: Brain },
+  { href: "/admin/billing", label: "API Usage & Billing", desc: "Token consumption & cost (detailed)", icon: CreditCard },
+  { href: "/admin/usage", label: "Usage (Legacy)", desc: "Claude token consumption & cost", icon: Zap },
+  { href: "/admin/sessions", label: "Active Sessions", desc: "Devices & login locations", icon: MonitorCheck },
+  { href: "/admin/audit-logs", label: "Activity Logs", desc: "Full audit trail & reports", icon: ClipboardList },
   { href: "/admin/users", label: "Settings", desc: "Team & access", icon: Settings },
 ];
 

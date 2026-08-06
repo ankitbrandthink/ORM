@@ -1,4 +1,15 @@
-from fastapi import APIRouter, Depends
+import csv
+import io
+import json
+import os
+import shutil
+import tempfile
+import zipfile
+from datetime import datetime
+from typing import List, Optional
+
+from fastapi import APIRouter, Body, Depends, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -17,14 +28,193 @@ def admin_users(current: CurrentUser = Depends(require_roles("SuperAdmin", "CROM
              "is_active": u.is_active, "is_deleted": u.is_deleted} for u in users]
 
 
+def _build_audit_query(db: Session, tenant_id: str, action: Optional[str], actor_id: Optional[str],
+                       date_from: Optional[str], date_to: Optional[str]):
+    q = db.query(AuditLog, User).outerjoin(
+        User, AuditLog.actor_id == User.id
+    ).filter(AuditLog.tenant_id == tenant_id)
+    if action:
+        q = q.filter(AuditLog.action.ilike(f"%{action}%"))
+    if actor_id:
+        q = q.filter(AuditLog.actor_id == actor_id)
+    if date_from:
+        q = q.filter(AuditLog.created_at >= date_from)
+    if date_to:
+        q = q.filter(AuditLog.created_at <= date_to + "T23:59:59")
+    return q.order_by(AuditLog.created_at.desc())
+
+
 @router.get("/audit-logs")
-def audit_logs(current: CurrentUser = Depends(require_roles("SuperAdmin", "CROManager")),
-               db: Session = Depends(get_db), limit: int = 100):
-    logs = (db.query(AuditLog).filter(AuditLog.tenant_id == current.tenant_id)
-            .order_by(AuditLog.created_at.desc()).limit(limit).all())
-    return [{"id": l.id, "action": l.action, "actor_id": l.actor_id,
-             "target_type": l.target_type, "target_id": l.target_id,
-             "detail": l.detail, "at": l.created_at} for l in logs]
+def audit_logs(
+    current: CurrentUser = Depends(require_roles("SuperAdmin", "CROManager")),
+    db: Session = Depends(get_db),
+    limit: int = Query(100, le=1000),
+    offset: int = Query(0, ge=0),
+    action: Optional[str] = Query(None),
+    actor_id: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD"),
+):
+    q = _build_audit_query(db, current.tenant_id, action, actor_id, date_from, date_to)
+    total = q.count()
+    rows = q.offset(offset).limit(limit).all()
+    items = []
+    for entry, user in rows:
+        detail = entry.detail or {}
+        items.append({
+            "id": entry.id,
+            "action": entry.action,
+            "actor_id": entry.actor_id,
+            "actor_email": user.email if user else None,
+            "actor_name": user.full_name if user else None,
+            "target_type": entry.target_type,
+            "target_id": entry.target_id,
+            "ip": detail.get("ip"),
+            "device": detail.get("device") or detail.get("device_name"),
+            "browser": detail.get("browser"),
+            "detail": detail,
+            "at": entry.created_at.isoformat() if entry.created_at else None,
+        })
+    return {"total": total, "offset": offset, "limit": limit, "items": items}
+
+
+@router.get("/audit-logs/download")
+def download_audit_logs(
+    current: CurrentUser = Depends(require_roles("SuperAdmin", "CROManager")),
+    db: Session = Depends(get_db),
+    action: Optional[str] = Query(None),
+    actor_id: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+):
+    """Export audit logs as a CSV file."""
+    q = _build_audit_query(db, current.tenant_id, action, actor_id, date_from, date_to)
+    rows = q.limit(10000).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Timestamp", "Action", "User Email", "User Name", "IP Address",
+                     "Device", "Browser", "Target Type", "Target ID", "Detail"])
+    for entry, user in rows:
+        detail = entry.detail or {}
+        writer.writerow([
+            entry.created_at.isoformat() if entry.created_at else "",
+            entry.action or "",
+            user.email if user else "",
+            user.full_name if user else "",
+            detail.get("ip", ""),
+            detail.get("device") or detail.get("device_name", ""),
+            detail.get("browser", ""),
+            entry.target_type or "",
+            entry.target_id or "",
+            json.dumps(detail),
+        ])
+
+    output.seek(0)
+    filename = f"audit_logs_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.delete("/audit-logs")
+def delete_audit_logs(
+    ids: List[str] = Body(..., embed=True),
+    current: CurrentUser = Depends(require_roles("SuperAdmin", "CROManager")),
+    db: Session = Depends(get_db),
+):
+    """Bulk delete audit log entries by ID list."""
+    if not ids:
+        return {"deleted": 0}
+    deleted = (
+        db.query(AuditLog)
+        .filter(AuditLog.id.in_(ids), AuditLog.tenant_id == current.tenant_id)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"deleted": deleted}
+
+
+@router.get("/backup/download")
+def download_backup(
+    current: CurrentUser = Depends(require_roles("SuperAdmin")),
+    db: Session = Depends(get_db),
+):
+    """Create and stream a ZIP backup: database + audit-logs CSV + system info."""
+    from app.config import settings
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+
+        # ── 1. SQLite database file ──────────────────────────────────────────
+        db_url = settings.DATABASE_URL  # e.g. "sqlite:///./orm_dev.db"
+        if db_url.startswith("sqlite:///"):
+            db_path = db_url.replace("sqlite:///", "").lstrip("./")
+            # Resolve relative to backend dir
+            backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            abs_db = os.path.join(backend_dir, db_path)
+            if not os.path.exists(abs_db):
+                # Try current working directory
+                abs_db = os.path.abspath(db_path)
+            if os.path.exists(abs_db):
+                # Copy to temp file to avoid lock issues, then add to zip
+                with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+                    tmp_path = tmp.name
+                try:
+                    shutil.copy2(abs_db, tmp_path)
+                    zf.write(tmp_path, "database/orm_dev.db")
+                finally:
+                    os.unlink(tmp_path)
+
+        # ── 2. Audit logs CSV ────────────────────────────────────────────────
+        logs = (
+            db.query(AuditLog, User)
+            .outerjoin(User, AuditLog.actor_id == User.id)
+            .filter(AuditLog.tenant_id == current.tenant_id)
+            .order_by(AuditLog.created_at.desc())
+            .limit(100_000)
+            .all()
+        )
+        csv_buf = io.StringIO()
+        writer = csv.writer(csv_buf)
+        writer.writerow(["Timestamp", "Action", "Description", "User Email", "User Name",
+                         "IP Address", "Device", "Browser", "Target Type", "Target ID", "Detail"])
+        for entry, user in logs:
+            det = entry.detail or {}
+            writer.writerow([
+                entry.created_at.isoformat() if entry.created_at else "",
+                entry.action or "",
+                det.get("description", ""),
+                user.email if user else "",
+                user.full_name if user else "",
+                det.get("ip", ""),
+                det.get("device") or det.get("device_name", ""),
+                det.get("browser", ""),
+                entry.target_type or "",
+                entry.target_id or "",
+                json.dumps(det),
+            ])
+        zf.writestr("audit_logs/audit_logs.csv", csv_buf.getvalue())
+
+        # ── 3. System info ───────────────────────────────────────────────────
+        info = {
+            "exported_at": datetime.utcnow().isoformat() + "Z",
+            "exported_by": current.email,
+            "tenant_id": current.tenant_id,
+            "total_audit_logs": len(logs),
+            "app_env": settings.APP_ENV,
+        }
+        zf.writestr("system_info.json", json.dumps(info, indent=2))
+
+    buf.seek(0)
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=orm_backup_{ts}.zip"},
+    )
 
 
 @router.get("/feature-flags")

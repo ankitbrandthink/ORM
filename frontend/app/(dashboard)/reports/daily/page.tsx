@@ -363,8 +363,8 @@ function SentimentsModal({ open, onClose, detail, summary, onSend, onPreviewPdf 
           <div>
             <div className="mb-2 font-medium">Key Narratives</div>
             <div className="flex flex-wrap gap-1.5">
-              {detail.narratives.map((n) => (
-                <span key={n.topic} className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-xs text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+              {detail.narratives.map((n, i) => (
+                <span key={`${n.topic}-${i}`} className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-xs text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
                   {n.topic} <span className="opacity-60">·{n.count}</span>
                 </span>
               ))}

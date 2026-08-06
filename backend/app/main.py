@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import api_router
 from app.config import settings
+from app.middleware.audit import AuditMiddleware
 from app.middleware.logging import LoggingMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +29,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AuditMiddleware)
 app.add_middleware(LoggingMiddleware)
 
 app.include_router(api_router, prefix="/api/v1")

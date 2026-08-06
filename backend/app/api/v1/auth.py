@@ -1,10 +1,11 @@
 import logging
 import random
+import secrets
 import string
 import urllib.request
 import urllib.parse
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -12,13 +13,16 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.dependencies import CurrentUser, require_roles
-from app.models import User, UserRole, Role, UserSession
-from app.schemas import LoginRequest, TokenResponse, RefreshRequest, RegisterRequest, UserOut, SignupRequest
+from app.models import AuditLog, User, UserRole, Role, UserSession
+from app.schemas import (
+    ForgotPasswordRequest, LoginRequest, RefreshRequest, RegisterRequest,
+    ResetPasswordRequest, TokenResponse, UserOut, SignupRequest,
+)
 from app.security import (
     create_access_token, create_refresh_token, decode_token,
     hash_password, verify_password,
 )
-from app.utils.email import send_welcome_email
+from app.utils.email import send_password_reset_email, send_welcome_email
 
 router = APIRouter()
 log = logging.getLogger("orm.auth")
@@ -72,7 +76,7 @@ def _get_ip(request: Request) -> str:
 
 
 def _parse_user_agent(ua: str) -> dict:
-    """Simple user-agent parser — no extra deps needed."""
+    """Parse user-agent string into device info with descriptive device_name."""
     import re
     ua_lower = ua.lower()
 
@@ -84,58 +88,98 @@ def _parse_user_agent(ua: str) -> dict:
     else:
         device_type = "desktop"
 
-    # Browser
+    # Browser + major version
+    browser = "Unknown"
+    browser_ver = ""
     if "edg/" in ua_lower or "edge/" in ua_lower:
         browser = "Edge"
+        m = re.search(r"(?:edg|edge)/(\d+)", ua, re.IGNORECASE)
+        if m:
+            browser_ver = m.group(1)
     elif "opr/" in ua_lower or "opera" in ua_lower:
         browser = "Opera"
+        m = re.search(r"opr/(\d+)", ua, re.IGNORECASE)
+        if m:
+            browser_ver = m.group(1)
     elif "chrome/" in ua_lower and "chromium" not in ua_lower:
         browser = "Chrome"
+        m = re.search(r"chrome/(\d+)", ua, re.IGNORECASE)
+        if m:
+            browser_ver = m.group(1)
     elif "firefox/" in ua_lower:
         browser = "Firefox"
+        m = re.search(r"firefox/(\d+)", ua, re.IGNORECASE)
+        if m:
+            browser_ver = m.group(1)
     elif "safari/" in ua_lower and "chrome" not in ua_lower:
         browser = "Safari"
-    else:
-        browser = "Unknown"
+        m = re.search(r"version/(\d+)", ua, re.IGNORECASE)
+        if m:
+            browser_ver = m.group(1)
 
-    # OS
+    browser_label = f"{browser} {browser_ver}" if browser_ver else browser
+
+    # OS + version
+    os_name = "Unknown"
+    os_ver = ""
     if "windows" in ua_lower:
         os_name = "Windows"
-    elif "mac os" in ua_lower or "macos" in ua_lower:
+        m = re.search(r"windows nt (\d+\.\d+)", ua, re.IGNORECASE)
+        if m:
+            nt_map = {"10.0": "10/11", "6.3": "8.1", "6.2": "8", "6.1": "7", "6.0": "Vista"}
+            os_ver = nt_map.get(m.group(1), m.group(1))
+    elif "mac os x" in ua_lower or "macos" in ua_lower:
         os_name = "macOS"
-    elif "iphone" in ua_lower or "ipad" in ua_lower:
+        m = re.search(r"mac os x (\d+[._]\d+)", ua, re.IGNORECASE)
+        if m:
+            os_ver = m.group(1).replace("_", ".")
+    elif "iphone" in ua_lower:
         os_name = "iOS"
+        m = re.search(r"cpu iphone os (\d+[._]\d+)", ua, re.IGNORECASE)
+        if m:
+            os_ver = m.group(1).replace("_", ".")
+    elif "ipad" in ua_lower:
+        os_name = "iPadOS"
+        m = re.search(r"cpu os (\d+[._]\d+)", ua, re.IGNORECASE)
+        if m:
+            os_ver = m.group(1).replace("_", ".")
     elif "android" in ua_lower:
         os_name = "Android"
+        m = re.search(r"android (\d+(?:\.\d+)?)", ua, re.IGNORECASE)
+        if m:
+            os_ver = m.group(1)
     elif "linux" in ua_lower:
         os_name = "Linux"
-    else:
-        os_name = "Unknown"
 
-    # Device name — best-effort human-readable label
+    os_label = f"{os_name} {os_ver}".strip() if os_ver else os_name
+
+    # Descriptive device name: "<Browser> <Ver> on <OS> <Ver>"
     device_name = None
     if "iphone" in ua_lower:
-        device_name = "iPhone"
+        device_name = f"iPhone · {browser_label}"
     elif "ipad" in ua_lower:
-        device_name = "iPad"
+        device_name = f"iPad · {browser_label}"
     elif "android" in ua_lower:
-        # Try to extract model: "Android X.X; <Model>) AppleWebKit"
-        m = re.search(r'android[\s/][^;)]+;\s*([^;)]+?)\s*(?:build|[;)])', ua, re.IGNORECASE)
+        m = re.search(r"android[\s/][^;)]+;\s*([^;)]+?)\s*(?:build|[;)])", ua, re.IGNORECASE)
+        model = ""
         if m:
-            model = m.group(1).strip()
-            # Skip generic tokens like "Mobile", "Tablet", "K"
-            if model and len(model) > 1 and model.lower() not in ("mobile", "tablet", "k"):
-                device_name = model
-        if not device_name:
-            device_name = "Android Device"
+            candidate = m.group(1).strip()
+            if candidate and len(candidate) > 1 and candidate.lower() not in ("mobile", "tablet", "k"):
+                model = candidate
+        device_name = f"{model or 'Android'} · {browser_label}"
     elif "windows" in ua_lower:
-        device_name = "Windows PC"
+        device_name = f"{browser_label} on Windows {os_ver}".strip() if os_ver else f"{browser_label} on Windows"
     elif "mac os" in ua_lower or "macos" in ua_lower:
-        device_name = "Mac"
+        device_name = f"{browser_label} on macOS {os_ver}".strip() if os_ver else f"{browser_label} on macOS"
     elif "linux" in ua_lower:
-        device_name = "Linux PC"
+        device_name = f"{browser_label} on Linux"
 
-    return {"device_type": device_type, "browser": browser, "os": os_name, "device_name": device_name}
+    return {
+        "device_type": device_type,
+        "browser": browser_label,
+        "os": os_label,
+        "device_name": device_name,
+    }
 
 
 def _geolocate(ip: str) -> dict:
@@ -160,7 +204,7 @@ def _geolocate(ip: str) -> dict:
     return {}
 
 
-def _create_session(db: Session, user: User, request: Request) -> UserSession:  # returns session so caller can embed session_id in JWT
+def _create_session(db: Session, user: User, request: Request) -> UserSession:
     """Create and persist a UserSession record."""
     ip = _get_ip(request)
     ua_str = request.headers.get("User-Agent", "")
@@ -190,17 +234,45 @@ def _create_session(db: Session, user: User, request: Request) -> UserSession:  
     return session
 
 
+def _log_activity(
+    db: Session,
+    tenant_id: str,
+    actor_id: str | None,
+    action: str,
+    target_type: str = "",
+    target_id: str = "",
+    detail: dict | None = None,
+) -> None:
+    """Write an AuditLog record. Never raises — audit failures must not break the caller."""
+    try:
+        entry = AuditLog(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action=action,
+            target_type=target_type,
+            target_id=target_id or "",
+            detail=detail or {},
+        )
+        db.add(entry)
+        db.commit()
+    except Exception as exc:
+        log.warning("[audit] Failed to write activity log for action=%s: %s", action, exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
 # ── endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/signup")
-def signup(body: SignupRequest, db: Session = Depends(get_db)):
+def signup(body: SignupRequest, request: Request, db: Session = Depends(get_db)):
     """Public signup — creates account within the default tenant, emails password."""
     email = body.email.strip().lower()
 
     if db.query(User).filter(User.email == email, User.is_deleted == False).first():
         raise HTTPException(status.HTTP_409_CONFLICT, "An account with this email already exists")
 
-    # Find the default (first) tenant
     from app.models import Tenant
     tenant = db.query(Tenant).filter(Tenant.is_deleted == False).order_by(Tenant.created_at).first()
     if not tenant:
@@ -217,17 +289,20 @@ def signup(body: SignupRequest, db: Session = Depends(get_db)):
     db.add(user)
     db.flush()
 
-    # Assign Viewer role by default
     viewer_role = db.query(Role).filter(Role.name == "Viewer").first()
     if viewer_role:
         db.add(UserRole(user_id=user.id, role_id=viewer_role.id))
 
     db.commit()
 
-    # Send welcome email (logs password if SMTP not configured)
     sent = send_welcome_email(email, body.full_name, password)
     if not sent:
         log.info("[signup] Password for %s: %s", email, password)
+
+    ip = _get_ip(request)
+    ua = request.headers.get("User-Agent", "")
+    _log_activity(db, tenant.id, user.id, "user.signup", "user", user.id,
+                  {"description": f"{email} created an account", "email": email, "ip": ip, "ua": ua[:200]})
 
     return {
         "message": "Account created. Check your email for your password.",
@@ -237,7 +312,6 @@ def signup(body: SignupRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
-    # reCAPTCHA check
     if settings.RECAPTCHA_ENABLED and body.recaptcha_token:
         if not _verify_recaptcha(body.recaptcha_token):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "reCAPTCHA verification failed")
@@ -251,11 +325,23 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     roles = _roles_for(db, user)
 
     session_id = None
+    ua_info = {}
     try:
         session = _create_session(db, user, request)
         session_id = session.id
+        ua_info = _parse_user_agent(request.headers.get("User-Agent", ""))
     except Exception as e:
         log.warning("[session] Failed to create session for %s: %s", user.email, e)
+
+    ip = _get_ip(request)
+    device_label = ua_info.get("device_name") or ua_info.get("os", "")
+    _log_activity(db, user.tenant_id, user.id, "user.login", "user", user.id, {
+        "description": f"Signed in from {device_label}" if device_label else "Signed in",
+        "ip": ip,
+        "device": device_label,
+        "browser": ua_info.get("browser", ""),
+        "session_id": session_id,
+    })
 
     return TokenResponse(
         access_token=create_access_token(user.id, user.tenant_id, roles, session_id=session_id),
@@ -272,7 +358,6 @@ def refresh(body: RefreshRequest, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
 
-    # If this refresh token is tied to a session, ensure it hasn't been revoked
     session_id = payload.get("session_id")
     if session_id:
         session = db.query(UserSession).filter(
@@ -291,37 +376,119 @@ def refresh(body: RefreshRequest, db: Session = Depends(get_db)):
 
 @router.post("/logout")
 def logout(request: Request, current: CurrentUser = Depends(require_roles()), db: Session = Depends(get_db)):
-    """Mark the most recent active session for this user as logged out."""
-    ip = _get_ip(request)
+    """Mark the session from the JWT as logged out (uses session_id, not IP)."""
+    token_str = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    session_id = None
+    if token_str:
+        payload = decode_token(token_str)
+        if payload:
+            session_id = payload.get("session_id")
+
     try:
-        session = (
-            db.query(UserSession)
-            .filter(
+        if session_id:
+            session = db.query(UserSession).filter(
+                UserSession.id == session_id,
                 UserSession.user_id == current.id,
-                UserSession.ip_address == ip,
                 UserSession.is_active == True,
+            ).first()
+        else:
+            # Fallback: find most-recent active session for this user
+            session = (
+                db.query(UserSession)
+                .filter(
+                    UserSession.user_id == current.id,
+                    UserSession.is_active == True,
+                )
+                .order_by(UserSession.logged_in_at.desc())
+                .first()
             )
-            .order_by(UserSession.logged_in_at.desc())
-            .first()
-        )
         if session:
             session.is_active = False
             session.logged_out_at = datetime.now(timezone.utc)
             db.commit()
     except Exception as e:
         log.warning("[session] Logout tracking error: %s", e)
+
+    ip = _get_ip(request)
+    _log_activity(db, current.tenant_id, current.id, "user.logout", "user", current.id, {
+        "description": "Signed out",
+        "ip": ip,
+        "session_id": session_id,
+    })
+
     return {"status": "logged_out"}
 
 
 @router.get("/me")
 def me(current: CurrentUser = Depends(require_roles())):
-    """Lightweight session-validity probe — returns 401 if session is revoked."""
     return {"id": current.id, "email": current.email}
+
+
+@router.post("/forgot-password")
+def forgot_password(body: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
+    """Send a password-reset email. Always returns 200 to prevent user enumeration."""
+    email = body.email.strip().lower()
+    user = db.query(User).filter(User.email == email, User.is_deleted == False, User.is_active == True).first()
+
+    if user:
+        raw_token = secrets.token_urlsafe(32)
+        user.password_reset_token = raw_token
+        user.password_reset_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        db.commit()
+
+        reset_link = f"{settings.FRONTEND_URL}/reset-password?token={raw_token}"
+        sent = send_password_reset_email(email, user.full_name or email, reset_link)
+        if not sent:
+            log.info("[forgot-password] Reset link for %s: %s", email, reset_link)
+
+        ip = _get_ip(request)
+        _log_activity(db, user.tenant_id, user.id, "user.forgot_password", "user", user.id, {
+            "description": f"Requested password reset for {email}",
+            "ip": ip,
+            "email_sent": sent,
+        })
+
+    return {"message": "If an account with that email exists, a reset link has been sent."}
+
+
+@router.post("/reset-password")
+def reset_password(body: ResetPasswordRequest, request: Request, db: Session = Depends(get_db)):
+    """Validate reset token and set a new password."""
+    if not body.new_password or len(body.new_password) < 8:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password must be at least 8 characters")
+
+    user = db.query(User).filter(
+        User.password_reset_token == body.token,
+        User.is_deleted == False,
+    ).first()
+
+    if not user:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired reset token")
+
+    # Check expiry
+    if user.password_reset_expires_at:
+        expires = user.password_reset_expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Reset token has expired. Request a new one.")
+
+    user.hashed_password = hash_password(body.new_password)
+    user.password_reset_token = None
+    user.password_reset_expires_at = None
+    db.commit()
+
+    ip = _get_ip(request)
+    _log_activity(db, user.tenant_id, user.id, "user.password_reset", "user", user.id,
+                  {"description": "Password was reset successfully", "ip": ip})
+
+    return {"message": "Password updated successfully. You can now sign in."}
 
 
 @router.post("/register", response_model=UserOut)
 def register(
     body: RegisterRequest,
+    request: Request,
     current: CurrentUser = Depends(require_roles("SuperAdmin", "CROManager")),
     db: Session = Depends(get_db),
 ):
@@ -340,5 +507,14 @@ def register(
         if role:
             db.add(UserRole(user_id=user.id, role_id=role.id))
     db.commit()
+
+    ip = _get_ip(request)
+    _log_activity(db, current.tenant_id, current.id, "user.register", "user", user.id, {
+        "description": f"Created new user account for {body.email}",
+        "new_user_email": body.email,
+        "roles": body.roles,
+        "ip": ip,
+    })
+
     return UserOut(id=user.id, email=user.email, full_name=user.full_name,
                    is_active=user.is_active, roles=body.roles)

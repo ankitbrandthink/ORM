@@ -172,4 +172,67 @@ def run_migrations():
             conn.commit()
             log.info("[migration] Phase 6 — added user_sessions.device_name column")
 
+        # ── Phase 7: password reset columns on users ──────────────────────────
+        if not _column_exists(conn, "users", "password_reset_token"):
+            conn.execute(text("ALTER TABLE users ADD COLUMN password_reset_token TEXT"))
+            conn.commit()
+            log.info("[migration] Phase 7a — added users.password_reset_token column")
+        if not _column_exists(conn, "users", "password_reset_expires_at"):
+            conn.execute(text("ALTER TABLE users ADD COLUMN password_reset_expires_at TEXT"))
+            conn.commit()
+            log.info("[migration] Phase 7b — added users.password_reset_expires_at column")
+
+        # ── Phase 8: discovered_influencers + discovered_posts ────────────────
+        if not _table_exists(conn, "discovered_influencers"):
+            conn.execute(text("""
+                CREATE TABLE discovered_influencers (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    client_id TEXT,
+                    platform TEXT DEFAULT 'twitter',
+                    handle TEXT NOT NULL,
+                    profile_url TEXT,
+                    keyword TEXT NOT NULL,
+                    stance TEXT DEFAULT 'Mixed',
+                    positive_count INTEGER DEFAULT 0,
+                    negative_count INTEGER DEFAULT 0,
+                    total_posts INTEGER DEFAULT 0,
+                    last_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    is_deleted INTEGER DEFAULT 0
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_disc_inf_tenant ON discovered_influencers(tenant_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_disc_inf_client ON discovered_influencers(client_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_disc_inf_keyword ON discovered_influencers(keyword)"))
+            conn.commit()
+            log.info("[migration] Phase 8 — created discovered_influencers table")
+
+        if not _table_exists(conn, "discovered_posts"):
+            conn.execute(text("""
+                CREATE TABLE discovered_posts (
+                    id TEXT PRIMARY KEY,
+                    influencer_id TEXT NOT NULL,
+                    post_url TEXT NOT NULL,
+                    content TEXT,
+                    sentiment TEXT,
+                    published_at TEXT,
+                    keyword TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    is_deleted INTEGER DEFAULT 0,
+                    FOREIGN KEY(influencer_id) REFERENCES discovered_influencers(id)
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_disc_posts_influencer ON discovered_posts(influencer_id)"))
+            conn.commit()
+            log.info("[migration] Phase 8 — created discovered_posts table")
+
+        # ── Phase 9: comments.author_url column ──────────────────────────────
+        if not _column_exists(conn, "comments", "author_url"):
+            conn.execute(text("ALTER TABLE comments ADD COLUMN author_url TEXT"))
+            conn.commit()
+            log.info("[migration] Phase 9 — added comments.author_url column")
+
     log.info("[migration] All migrations complete")
