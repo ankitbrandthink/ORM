@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.dependencies import CurrentUser, require_roles
+from app.dependencies import CurrentUser, get_current_user, require_roles
 from app.models import User, UserRole, Role, UserSession
 from app.schemas import LoginRequest, TokenResponse, RefreshRequest, RegisterRequest, UserOut, SignupRequest
 from app.security import (
@@ -277,6 +277,18 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     return TokenResponse(
         access_token=create_access_token(user.id, user.tenant_id, roles),
         refresh_token=create_refresh_token(user.id, user.tenant_id),
+    )
+
+
+@router.get("/me", response_model=UserOut)
+def get_me(current: CurrentUser = Depends(get_current_user)):
+    """Return the currently authenticated user's profile."""
+    return UserOut(
+        id=current.id,
+        email=current.email,
+        full_name=current.user.full_name,
+        is_active=current.user.is_active,
+        roles=current.roles,
     )
 
 
