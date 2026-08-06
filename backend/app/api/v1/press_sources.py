@@ -162,17 +162,39 @@ async def ingest_all_sources(
     current: CurrentUser = Depends(require_roles("CROManager", "Analyst")),
     db: Session = Depends(get_db),
 ):
-    """Trigger ingestion for all active press sources for this tenant."""
-    from app.scrapers.press_ingestion_service import ingest_all_for_tenant
+    """Trigger ingestion for all active press sources for this tenant (background).
 
-    # Run synchronously so user gets result immediately (sources ≤25)
-    try:
-        results = await ingest_all_for_tenant(db, current.tenant_id)
-        total_new = sum(r.get("new", 0) for r in results)
-        return {"status": "ok", "sources_processed": len(results), "total_new": total_new, "results": results}
-    except Exception as e:
-        log.error(f"[press] ingest-all error: {e}")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(e))
+    With 50+ sources, synchronous execution would exceed the nginx/proxy timeout (~60 s).
+    We return 200 immediately and let the ingestion run in a background task.
+    """
+    from app.scrapers.press_ingestion_service import ingest_all_for_tenant
+    from app.database import SessionLocal
+
+    tenant_id = current.tenant_id
+
+    # Count how many sources will be processed so the UI can show a meaningful message
+    from app.models import PressSource as PS
+    source_count = db.query(PS).filter(
+        PS.tenant_id == tenant_id,
+        PS.is_active == True,
+        PS.is_deleted == False,
+    ).count()
+
+    async def _run_ingest():
+        bg_db = SessionLocal()
+        try:
+            await ingest_all_for_tenant(bg_db, tenant_id)
+        except Exception as e:
+            log.error(f"[press] background ingest-all error: {e}")
+        finally:
+            bg_db.close()
+
+    background_tasks.add_task(_run_ingest)
+    return {
+        "status": "queued",
+        "sources_queued": source_count,
+        "message": f"Ingestion started for {source_count} sources. Refresh in a few minutes.",
+    }
 
 
 @router.get("/suggestions")

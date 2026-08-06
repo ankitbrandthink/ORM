@@ -1,95 +1,29 @@
-# Environment & secrets
-.env
-.env.local
-.env.server
-.env.production
-!.env.*.example
-!.env.production.example
-
 # Python
-__pycache__/
-*.pyc
-*.pyo
-.venv/
-venv/
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/**/*.pyc
+backend/.env
+backend/*.db
 
 # Node / Next.js
-node_modules/
-.next/
-tsconfig.tsbuildinfo
+frontend-src/node_modules/
+frontend-src/.next/cache/
+frontend-src/*.tar.gz
+frontend-src/*.zip
+frontend-src/.wwebjs_cache/
+frontend/.next/cache/
+frontend/node_modules/
 
-# Database & backups
-*.db
-*.db-wal
-*.db-shm
-backups/
+# Uploads & runtime data (never commit API keys / config)
+uploads/
+backend/app/data/
+backend/data/
 
-# Build artifacts & deploy tarballs
-*.tar.gz
-*.zip
-*.log
-frontend-prod.tar.gz
-static_assets.*
-frontend_standalone.*
-static-prod.tar.gz
-backend-prod.tar.gz
-frontend_bundle.tar.gz
-frontend-deploy.tar.gz
-static_deploy.tar.gz
+# Secrets
+*.env.local
+*.env.production.local
 
 # OS
 .DS_Store
 Thumbs.db
-
-# WhatsApp session data (auth cookies, browser cache)
-whatsapp-service/.wwebjs_auth/
-whatsapp-service/.wwebjs_cache/
-whatsapp-service/sessions/
-whatsapp-service/*.db
-whatsapp-service/*.db-journal
-whatsapp-service/*.db-shm
-whatsapp-service/*.db-wal
-
-# Research / temp
-backend/_*.xlsx
-backend/_*.json
-rc_data.json
-fb_test.py
-capture_and_report.py
-capture_screens.py
-generate_booklet.py
-generate_project_description.py
-generate_rc_combined_report.py
-generate_rc_report.py
-seed_rc_tw_yt.py
-booklet_screens/
-screenshots_rc/
-frontend-dev.log
-
-# Generated reports & documents
-*.pdf
-*.docx
-~$*.docx
-
-# ORM-specific scratch folders
-orm_new/
-docs/
-scripts/
-seed_*.py
-generate_*.py
-capture_*.py
-fb_test.py
-
-# Celery beat schedule
-backend/celerybeat-schedule
-
-# WhatsApp cache anywhere in the project
-**/.wwebjs_cache/
-**/.wwebjs_auth/
-
-# Backup files
-*.bak
-next.config.mjs.bak
-
-# Frontend public temp
-frontend/public/reports/

@@ -68,8 +68,6 @@ class User(Base, TimestampMixin):
     hashed_password = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True)
     meta = Column(JSONB, default=dict)
-    password_reset_token = Column(String(255), nullable=True)
-    password_reset_expires_at = Column(DateTime(timezone=True), nullable=True)
     roles = relationship("UserRole", back_populates="user", cascade="all, delete-orphan")
     __table_args__ = (UniqueConstraint("tenant_id", "email", name="uq_user_tenant_email"),)
 
@@ -142,6 +140,37 @@ class SocialProfile(Base, TimestampMixin):
     followers = Column(Integer, default=0)
     total_posts = Column(Integer, default=0)
     meta = Column(JSONB, default=dict)
+
+
+class DiscoveredInfluencer(Base, TimestampMixin):
+    """Social influencer discovered via keyword search on Twitter/X and other platforms."""
+    __tablename__ = "discovered_influencers"
+    id = pk()
+    tenant_id = tenant_fk()
+    client_id = Column(UUID(as_uuid=False), ForeignKey("clients.id"), index=True, nullable=True)
+    platform = Column(String(50), default="twitter")   # twitter, youtube, instagram
+    handle = Column(String(255), nullable=False)
+    profile_url = Column(String(500), nullable=True)
+    keyword = Column(String(255), nullable=False)       # search keyword used to find this account
+    stance = Column(String(20), default="Mixed")        # Pro, Anti, Mixed, Neutral
+    positive_count = Column(Integer, default=0)
+    negative_count = Column(Integer, default=0)
+    total_posts = Column(Integer, default=0)
+    last_seen = Column(DateTime(timezone=True), server_default=func.now())
+    posts = relationship("DiscoveredPost", back_populates="influencer", cascade="all, delete-orphan")
+
+
+class DiscoveredPost(Base, TimestampMixin):
+    """A single post/tweet from a discovered influencer."""
+    __tablename__ = "discovered_posts"
+    id = pk()
+    influencer_id = Column(UUID(as_uuid=False), ForeignKey("discovered_influencers.id"), nullable=False, index=True)
+    post_url = Column(String(500), nullable=False)
+    content = Column(Text, nullable=True)
+    sentiment = Column(String(20), nullable=True)      # Pro, Anti, Neutral
+    published_at = Column(DateTime(timezone=True), nullable=True)
+    keyword = Column(String(255), nullable=True)
+    influencer = relationship("DiscoveredInfluencer", back_populates="posts")
 
 
 class UserSession(Base):
@@ -564,37 +593,6 @@ class PressSource(Base, TimestampMixin):
     config = Column(JSONB, default=dict)   # max_articles, yt_api_key override, etc.
     is_active = Column(Boolean, default=True)
 
-
-
-class DiscoveredInfluencer(Base, TimestampMixin):
-    """Social influencer discovered via keyword search on Twitter/X and other platforms."""
-    __tablename__ = "discovered_influencers"
-    id = pk()
-    tenant_id = tenant_fk()
-    client_id = Column(UUID(as_uuid=False), ForeignKey("clients.id"), index=True, nullable=True)
-    platform = Column(String(50), default="twitter")
-    handle = Column(String(255), nullable=False)
-    profile_url = Column(String(500), nullable=True)
-    keyword = Column(String(255), nullable=False)
-    stance = Column(String(20), default="Mixed")        # Pro, Anti, Mixed, Neutral
-    positive_count = Column(Integer, default=0)
-    negative_count = Column(Integer, default=0)
-    total_posts = Column(Integer, default=0)
-    last_seen = Column(DateTime(timezone=True), server_default=func.now())
-    posts = relationship("DiscoveredPost", back_populates="influencer", cascade="all, delete-orphan")
-
-
-class DiscoveredPost(Base, TimestampMixin):
-    """A single post/tweet from a discovered influencer."""
-    __tablename__ = "discovered_posts"
-    id = pk()
-    influencer_id = Column(UUID(as_uuid=False), ForeignKey("discovered_influencers.id"), nullable=False, index=True)
-    post_url = Column(String(500), nullable=False)
-    content = Column(Text, nullable=True)
-    sentiment = Column(String(20), nullable=True)
-    published_at = Column(DateTime(timezone=True), nullable=True)
-    keyword = Column(String(255), nullable=True)
-    influencer = relationship("DiscoveredInfluencer", back_populates="posts")
 
 
 class ApiUsageLog(Base, TimestampMixin):

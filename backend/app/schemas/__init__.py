@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---- Auth ----
@@ -9,15 +9,6 @@ class LoginRequest(BaseModel):
     email: str
     password: str
     recaptcha_token: Optional[str] = None
-
-
-class ForgotPasswordRequest(BaseModel):
-    email: str
-
-
-class ResetPasswordRequest(BaseModel):
-    token: str
-    new_password: str
 
 
 class SignupRequest(BaseModel):
@@ -163,6 +154,13 @@ class PostOut(ORMBase):
     published_at: Optional[datetime] = None
     last_synced_at: Optional[datetime] = None
     metrics: dict = {}
+
+    @model_validator(mode="after")
+    def fill_permalink(self) -> "PostOut":
+        # Social sync posts may have url set but permalink null — fill it in
+        if not self.permalink and self.url:
+            self.permalink = self.url
+        return self
 
 
 class PostSentiment(BaseModel):

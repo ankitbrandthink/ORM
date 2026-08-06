@@ -11,7 +11,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -621,6 +621,21 @@ def _post_ids_for_client(db: Session, client_id: str):
     return [r for (r,) in q.all()]
 
 
+def _post_id_subq(db: Session, client_id: str):
+    """Return a SQLAlchemy subquery for Post IDs belonging to a client.
+    Avoids materialising a large Python IN list for high-volume queries."""
+    profile_subq = (db.query(SocialProfile.id)
+                    .filter(SocialProfile.client_id == client_id)
+                    .subquery())
+    return (db.query(Post.id)
+            .filter(
+                Post.is_deleted == False,
+                or_(Post.client_id == client_id,
+                    Post.social_profile_id.in_(profile_subq)),
+            )
+            .subquery())
+
+
 @router.get("/daily-clients")
 def daily_clients_summary(current: CurrentUser = Depends(get_current_user),
                           db: Session = Depends(get_db),
@@ -634,76 +649,134 @@ def daily_clients_summary(current: CurrentUser = Depends(get_current_user),
         q = q.filter(Client.id == client_id)
     clients = q.order_by(Client.name).all()
 
+    if not clients:
+        return {"clients": [], "generated_at": datetime.now(timezone.utc).isoformat()}
+
+    client_map = {c.id: c for c in clients}
+    client_ids = list(client_map)
+
+    # Named placeholders for SQLite (no tuple binding support)
+    cid_params = {f"cid{i}": cid for i, cid in enumerate(client_ids)}
+    cid_ph = ",".join(f":cid{i}" for i in range(len(client_ids)))
+
+    # Optional date filter SQL fragments
+    post_date_sql = ""
+    comment_date_sql = ""
+    date_params: dict = {}
+    if date_from:
+        post_date_sql += " AND p.published_at >= :date_from"
+        comment_date_sql += " AND c.published_at >= :date_from"
+        date_params["date_from"] = date_from
+    if date_to:
+        post_date_sql += " AND p.published_at <= :date_to_end"
+        comment_date_sql += " AND c.published_at <= :date_to_end"
+        date_params["date_to_end"] = date_to + " 23:59:59"
+
+    all_params = {**cid_params, **date_params}
+
+    # ── Batch query 1: post counts + comment counts + sentiment ────────────
+    # Uses UNION ALL to split direct-client posts from profile-routed posts so
+    # SQLite can use ix_posts_client_id and ix_posts_social_profile_id.
+    stats_sql = text(f"""
+        WITH cp AS (
+            SELECT p.id AS post_id, p.client_id AS client_id, p.published_at
+            FROM   posts p
+            WHERE  p.is_deleted = 0
+              AND  p.client_id IN ({cid_ph})
+              {post_date_sql}
+            UNION ALL
+            SELECT p.id, sp.client_id, p.published_at
+            FROM   posts p
+            JOIN   social_profiles sp ON sp.id = p.social_profile_id
+            WHERE  p.is_deleted = 0
+              AND  p.client_id IS NULL
+              AND  sp.client_id IN ({cid_ph})
+              {post_date_sql}
+        )
+        SELECT
+            cp.client_id                               AS client_id,
+            COUNT(DISTINCT cp.post_id)                 AS post_count,
+            COUNT(c.id)                                AS total_comments,
+            COALESCE(ca.sentiment, 'Unknown')          AS sentiment,
+            COUNT(ca.id)                               AS analyzed_count,
+            MAX(cp.published_at)                       AS latest_post_date
+        FROM cp
+        LEFT JOIN comments c
+               ON c.post_id = cp.post_id
+              {comment_date_sql}
+        LEFT JOIN comment_analysis ca
+               ON ca.comment_id = c.id
+              AND ca.is_deleted = 0
+        GROUP BY cp.client_id, ca.sentiment
+    """)
+    stat_rows = db.execute(stats_sql, all_params).fetchall()
+
+    # ── Batch query 2: narrative texts (top 50 per client) ────────────────
+    narrative_sql = text(f"""
+        WITH cp AS (
+            SELECT p.id AS post_id, p.client_id
+            FROM   posts p
+            WHERE  p.is_deleted = 0 AND p.client_id IN ({cid_ph})
+            UNION ALL
+            SELECT p.id, sp.client_id
+            FROM   posts p
+            JOIN   social_profiles sp ON sp.id = p.social_profile_id
+            WHERE  p.is_deleted = 0 AND p.client_id IS NULL AND sp.client_id IN ({cid_ph})
+        )
+        SELECT cp.client_id, pa.main_narrative
+        FROM   cp
+        JOIN   post_analysis pa ON pa.post_id = cp.post_id
+        WHERE  pa.is_deleted = 0 AND pa.main_narrative IS NOT NULL
+        LIMIT  {50 * len(client_ids)}
+    """)
+    narrative_rows = db.execute(narrative_sql, cid_params).fetchall()
+
+    # ── Aggregate in Python ───────────────────────────────────────────────
+    from collections import defaultdict as _dd
+
+    stats_by_client: dict = _dd(lambda: {
+        "post_count": 0, "total_comments": 0, "latest_post_date": None,
+        "sentiment": {"Positive": 0, "Negative": 0, "Neutral": 0},
+    })
+    for row in stat_rows:
+        s = stats_by_client[row.client_id]
+        s["post_count"] = row.post_count
+        s["total_comments"] = row.total_comments
+        if row.latest_post_date and (s["latest_post_date"] is None or row.latest_post_date > s["latest_post_date"]):
+            s["latest_post_date"] = row.latest_post_date
+        sent = row.sentiment
+        if sent in ("Positive", "Negative", "Neutral"):
+            s["sentiment"][sent] = row.analyzed_count
+
+    narratives_by_client: dict = _dd(list)
+    for row in narrative_rows:
+        narratives_by_client[row.client_id].append(row.main_narrative)
+
     result = []
     for client in clients:
-        post_ids = _post_ids_for_client(db, client.id)
-
-        # Post count: filter by published_at when a date range is requested
-        if (date_from or date_to) and post_ids:
-            pq = db.query(func.count(Post.id)).filter(Post.id.in_(post_ids))
-            if date_from:
-                pq = pq.filter(Post.published_at >= date_from)
-            if date_to:
-                pq = pq.filter(Post.published_at <= date_to + " 23:59:59")
-            post_count = pq.scalar() or 0
-        else:
-            post_count = len(post_ids)
-
-        if post_ids:
-            # Sentiment breakdown for percentage calculation
-            ca_q = (db.query(CommentAnalysis.sentiment, func.count())
-                    .join(Comment, Comment.id == CommentAnalysis.comment_id)
-                    .filter(Comment.post_id.in_(post_ids),
-                            CommentAnalysis.is_deleted == False))
-            if date_from:
-                ca_q = ca_q.filter(Comment.published_at >= date_from)
-            if date_to:
-                ca_q = ca_q.filter(Comment.published_at <= date_to + " 23:59:59")
-            sent_rows = ca_q.group_by(CommentAnalysis.sentiment).all()
-
-            # Total comments in date range (seeded + real, regardless of analysis)
-            cq = db.query(func.count(Comment.id)).filter(Comment.post_id.in_(post_ids))
-            if date_from:
-                cq = cq.filter(Comment.published_at >= date_from)
-            if date_to:
-                cq = cq.filter(Comment.published_at <= date_to + " 23:59:59")
-            total_comments = cq.scalar() or 0
-        else:
-            sent_rows = []
-            total_comments = 0
-
-        sentiment = {"Positive": 0, "Negative": 0, "Neutral": 0}
-        for s, c in sent_rows:
-            sentiment[s or "Neutral"] = c
+        s = stats_by_client.get(client.id, {})
+        sentiment = s.get("sentiment", {"Positive": 0, "Negative": 0, "Neutral": 0})
         analyzed = sum(sentiment.values())
         pct_div = analyzed or 1
         pos_pct = round(sentiment["Positive"] * 100 / pct_div)
         neg_pct = round(sentiment["Negative"] * 100 / pct_div)
 
-        narrative_texts = ([n for (n,) in
-            db.query(PostAnalysis.main_narrative)
-            .filter(PostAnalysis.post_id.in_(post_ids),
-                    PostAnalysis.is_deleted == False,
-                    PostAnalysis.main_narrative.isnot(None))
-            .limit(50).all()] if post_ids else [])
-        top_topics = _extract_top_words(narrative_texts)
-
-        # latest_date: when filtered show the filter boundary, else actual latest post date
         if date_to:
             display_date = date_to
         elif date_from:
             display_date = date_from
         else:
-            ld = (db.query(func.max(Post.published_at))
-                  .filter(Post.id.in_(post_ids)).scalar() if post_ids else None)
+            ld = s.get("latest_post_date")
             display_date = str(ld)[:10] if ld else None
+
+        top_topics = _extract_top_words(narratives_by_client.get(client.id, []))
 
         result.append({
             "id": client.id,
             "name": client.name,
             "industry": client.industry or "",
-            "posts": post_count,
-            "comments": total_comments,
+            "posts": s.get("post_count", 0),
+            "comments": s.get("total_comments", 0),
             "analyzed_comments": analyzed,
             "sentiment": sentiment,
             "positive_pct": pos_pct,

@@ -27,18 +27,32 @@ def _create_token(data: dict, expires_delta: timedelta, token_type: str) -> str:
     return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
-def create_access_token(sub: str, tenant_id: str, roles: list[str], session_id: str | None = None) -> str:
-    data = {"sub": sub, "tenant_id": tenant_id, "roles": roles}
-    if session_id:
-        data["session_id"] = session_id
-    return _create_token(data, timedelta(minutes=settings.JWT_ACCESS_EXPIRE_MINUTES), "access")
+def create_access_token(sub: str, tenant_id: str, roles: list[str]) -> str:
+    return _create_token(
+        {"sub": sub, "tenant_id": tenant_id, "roles": roles},
+        timedelta(minutes=settings.JWT_ACCESS_EXPIRE_MINUTES),
+        "access",
+    )
 
 
-def create_refresh_token(sub: str, tenant_id: str, session_id: str | None = None) -> str:
-    data = {"sub": sub, "tenant_id": tenant_id}
-    if session_id:
-        data["session_id"] = session_id
-    return _create_token(data, timedelta(days=settings.JWT_REFRESH_EXPIRE_DAYS), "refresh")
+def create_refresh_token(sub: str, tenant_id: str) -> str:
+    return _create_token(
+        {"sub": sub, "tenant_id": tenant_id},
+        timedelta(days=settings.JWT_REFRESH_EXPIRE_DAYS),
+        "refresh",
+    )
+
+
+def create_password_reset_token(user_id: str) -> str:
+    return _create_token({"sub": user_id}, timedelta(hours=1), "password_reset")
+
+
+def verify_password_reset_token(token: str) -> str | None:
+    """Returns user_id if valid reset token, else None."""
+    payload = decode_token(token)
+    if payload and payload.get("type") == "password_reset":
+        return payload.get("sub")
+    return None
 
 
 def decode_token(token: str) -> dict | None:

@@ -42,9 +42,6 @@ class Settings(BaseSettings):
     # Per-tenant daily token ceiling (0 = unlimited)
     CLAUDE_DAILY_TOKEN_LIMIT: int = 500_000
 
-    # Frontend base URL — used for password-reset links in emails
-    FRONTEND_URL: str = "http://localhost:3001"
-
     # SMTP — for signup welcome email (optional; if unset, password is logged only)
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587

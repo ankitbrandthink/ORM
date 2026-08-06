@@ -172,17 +172,7 @@ def run_migrations():
             conn.commit()
             log.info("[migration] Phase 6 — added user_sessions.device_name column")
 
-        # ── Phase 7: password reset columns on users ──────────────────────────
-        if not _column_exists(conn, "users", "password_reset_token"):
-            conn.execute(text("ALTER TABLE users ADD COLUMN password_reset_token TEXT"))
-            conn.commit()
-            log.info("[migration] Phase 7a — added users.password_reset_token column")
-        if not _column_exists(conn, "users", "password_reset_expires_at"):
-            conn.execute(text("ALTER TABLE users ADD COLUMN password_reset_expires_at TEXT"))
-            conn.commit()
-            log.info("[migration] Phase 7b — added users.password_reset_expires_at column")
-
-        # ── Phase 8: discovered_influencers + discovered_posts ────────────────
+        # ── Phase 7: discovered_influencers + discovered_posts ────────────────
         if not _table_exists(conn, "discovered_influencers"):
             conn.execute(text("""
                 CREATE TABLE discovered_influencers (
@@ -207,7 +197,7 @@ def run_migrations():
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_disc_inf_client ON discovered_influencers(client_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_disc_inf_keyword ON discovered_influencers(keyword)"))
             conn.commit()
-            log.info("[migration] Phase 8 — created discovered_influencers table")
+            log.info("[migration] Phase 7 — created discovered_influencers table")
 
         if not _table_exists(conn, "discovered_posts"):
             conn.execute(text("""
@@ -227,12 +217,12 @@ def run_migrations():
             """))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_disc_posts_influencer ON discovered_posts(influencer_id)"))
             conn.commit()
-            log.info("[migration] Phase 8 — created discovered_posts table")
+            log.info("[migration] Phase 7 — created discovered_posts table")
 
-        # ── Phase 9: comments.author_url column ──────────────────────────────
+        # ── Phase 8: comments.author_url column ──────────────────────────────
         if not _column_exists(conn, "comments", "author_url"):
             conn.execute(text("ALTER TABLE comments ADD COLUMN author_url TEXT"))
             conn.commit()
-            log.info("[migration] Phase 9 — added comments.author_url column")
+            log.info("[migration] Phase 8 — added comments.author_url column")
 
     log.info("[migration] All migrations complete")
