@@ -671,6 +671,282 @@ ${antiCount > 0 ? `<div class="rec warn"><strong>⚠ Monitor ${antiCount} Anti V
     return html;
   }
 
+  function buildStrategyReportHtml(): string {
+    const proList   = discovered.filter(i => i.stance === "Pro");
+    const antiList  = discovered.filter(i => i.stance === "Anti");
+    const mixedList = discovered.filter(i => i.stance === "Mixed");
+    const total     = discovered.length;
+    const proCount  = proList.length;
+    const antiCount = antiList.length;
+    const mixedCount = mixedList.length;
+    const proP   = total > 0 ? Math.round((proCount / total) * 100) : 0;
+    const antiP  = total > 0 ? Math.round((antiCount / total) * 100) : 0;
+    const mixedP = Math.max(0, 100 - proP - antiP);
+    const repScore = total > 0 ? Math.round(((proCount + mixedCount * 0.5) / total) * 100) : 50;
+    const date = new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
+
+    function esc(s: string) {
+      return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    const repColor = repScore >= 70 ? "#1E6B47" : repScore >= 50 ? "#C8892A" : "#9B2F2F";
+    const repLabel = repScore >= 70 ? "Strong — Maintain &amp; Scale" : repScore >= 50 ? "Moderate — Action Required" : "Critical — Urgent Intervention";
+
+    const influencerRows = discovered.map((inf, i) => {
+      const sc = inf.stance === "Pro" ? "#1E6B47" : inf.stance === "Anti" ? "#9B2F2F" : "#4A6080";
+      const sb = inf.stance === "Pro" ? "#E4F3EC" : inf.stance === "Anti" ? "#FAEAEA" : "#ECF0F6";
+      const kws = inf.keyword_clusters.slice(0, 3).map(k => `#${esc(k)}`).join(" ") || "—";
+      return `<tr style="${i % 2 === 0 ? "" : "background:#F9F9F7;"}">
+        <td style="padding:9px 12px;border-bottom:1px solid #EBEBEB;"><div style="font-weight:600;color:#1A2E47;font-size:12px;">@${esc(inf.handle)}</div><div style="font-size:11px;color:#8A9AB0;margin-top:2px;">${esc(platformLabel(inf.platform))}</div></td>
+        <td style="padding:9px 12px;border-bottom:1px solid #EBEBEB;"><span style="display:inline-block;background:${sb};color:${sc};font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:0.04em;">${esc(inf.stance)}</span></td>
+        <td style="padding:9px 12px;border-bottom:1px solid #EBEBEB;font-size:12px;color:#4A5568;text-align:right;">${inf.total_posts}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #EBEBEB;font-size:12px;color:#4A5568;text-align:right;color:#1E6B47;">+${inf.positive_count}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #EBEBEB;font-size:12px;color:#4A5568;text-align:right;color:#9B2F2F;">−${inf.negative_count}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #EBEBEB;font-size:12px;color:#8A9AB0;">${kws}</td>
+      </tr>`;
+    }).join("");
+
+    const pri1 = antiCount > 0
+      ? `Address the ${antiCount} active critic${antiCount > 1 ? "s" : ""} with documented evidence — verified case outcomes, official records, third-party citations. Direct rebuttals give critics amplification; evidence-led redirects reframe the narrative.`
+      : `Build an independent advocate network. ${esc(clientName)}'s current monitoring reflects mostly organizational handles. Identify 15–20 independent voices — journalists, academics, sector experts — who can speak credibly as third-party validators.`;
+    const pri2 = mixedCount > 5
+      ? `Convert the ${mixedCount} Mixed/Neutral voices (${mixedP}%) into active supporters. These accounts are unconvinced, not opposed. Provide verified facts, documented impact, and shareable content that makes endorsement easy without requiring ideological alignment.`
+      : `Expand the monitoring ecosystem. With only ${total} account${total !== 1 ? "s" : ""} tracked, the dataset is too thin for strategic decisions. Expand keywords, add LinkedIn and Telegram, and run monthly monitoring cycles.`;
+    const pri3 = `Build pre-crisis communication capacity before critics mobilize. Create a content library: documented outcomes, authoritative citations, and pre-approved rapid-response templates for the 5 most likely attack vectors. A prepared organization controls the first frame of any controversy.`;
+
+    return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ORM Strategy Report — ${esc(clientName)}</title>
+<style>
+@page{size:A4;margin:12mm 10mm;}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:-apple-system,'Segoe UI',Arial,sans-serif;background:#F4F3EF;color:#181E2C;font-size:14px;line-height:1.65;}
+.wrap{max-width:900px;margin:0 auto;background:#fff;}
+.hdr{background:#1A2E47;color:#fff;padding:32px 40px 26px;}
+.hdr-ey{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:8px;font-weight:600;}
+.hdr-nm{font-family:Georgia,serif;font-size:24px;font-weight:normal;color:#fff;margin-bottom:5px;}
+.hdr-mt{font-size:12px;color:rgba(255,255,255,.42);line-height:1.8;}
+.hdr-kpis{display:flex;gap:24px;margin-top:20px;padding-top:18px;border-top:1px solid rgba(255,255,255,.1);flex-wrap:wrap;}
+.kv{font-size:26px;font-weight:700;line-height:1;margin-bottom:3px;}
+.kl{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.38);}
+.sec{padding:32px 40px;border-bottom:1px solid #EBEBEB;}
+.sec:last-child{border-bottom:none;}
+.ey{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#C8892A;font-weight:700;margin-bottom:6px;}
+.st{font-family:Georgia,serif;font-size:19px;font-weight:normal;color:#181E2C;margin-bottom:14px;line-height:1.35;}
+.rule{height:1px;background:#EBEBEB;margin-bottom:22px;}
+.score-row{display:flex;gap:24px;align-items:center;background:#F4F3EF;border:1px solid #DEDBD4;border-radius:10px;padding:20px 24px;margin-bottom:20px;flex-wrap:wrap;}
+.sc-num{font-size:44px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;}
+.sc-txt{flex:1;min-width:200px;}
+.sc-lbl{font-size:14px;font-weight:600;color:#181E2C;margin-bottom:4px;}
+.sc-sub{font-size:12.5px;color:#48556A;line-height:1.65;}
+.sbar{display:flex;height:7px;border-radius:4px;overflow:hidden;margin:11px 0 6px;gap:2px;}
+.leg{display:flex;gap:14px;font-size:11px;color:#48556A;flex-wrap:wrap;}
+.ld{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:3px;vertical-align:middle;}
+.alert{border-left:3px solid #C8892A;background:#FEFCF8;padding:12px 15px;border-radius:0 6px 6px 0;font-size:12.5px;color:#48556A;line-height:1.65;margin-bottom:20px;}
+.alert strong{color:#181E2C;}
+.cards{display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;}
+.card{flex:1;min-width:170px;background:#F4F3EF;border:1px solid #DEDBD4;border-radius:10px;padding:14px 16px;}
+.cl{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#8A9AB0;margin-bottom:6px;font-weight:600;}
+.ct{font-size:13px;font-weight:700;color:#181E2C;margin-bottom:4px;}
+.cb{font-size:12px;color:#48556A;line-height:1.65;}
+.tw{overflow-x:auto;border:1px solid #DEDBD4;border-radius:10px;margin-bottom:14px;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+thead{background:#EDECE8;}
+th{padding:8px 12px;text-align:left;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#8A9AB0;font-weight:600;border-bottom:1px solid #DEDBD4;}
+.pils{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;}
+.pil{flex:1;min-width:200px;background:#F4F3EF;border:1px solid #DEDBD4;border-radius:10px;padding:18px;}
+.pn{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#C8892A;margin-bottom:8px;}
+.pt{font-family:Georgia,serif;font-size:14px;font-weight:normal;color:#181E2C;margin-bottom:8px;line-height:1.4;}
+.pb{font-size:12px;color:#48556A;line-height:1.7;}
+.narr{background:#1A2E47;border-radius:10px;padding:24px 28px;margin-bottom:18px;}
+.nl{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.38);margin-bottom:8px;font-weight:600;}
+.ns{font-family:Georgia,serif;font-size:16px;font-weight:normal;color:#fff;line-height:1.6;}
+.ne{color:#E8A94A;font-style:normal;}
+.mps{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:22px;}
+.mp{flex:1;min-width:160px;border-left:3px solid #C8892A;background:#FEFCF8;padding:12px 14px;border-radius:0 6px 6px 0;}
+.mpt{font-size:13px;font-weight:700;color:#181E2C;margin-bottom:4px;}
+.mpb{font-size:12px;color:#48556A;line-height:1.65;}
+.tone{display:flex;gap:0;border:1px solid #DEDBD4;border-radius:10px;overflow:hidden;}
+.tc{flex:1;}
+.th{padding:9px 13px;font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;border-bottom:1px solid #DEDBD4;}
+.th.do{background:#E4F3EC;color:#1E6B47;}
+.th.av{background:#FAEAEA;color:#9B2F2F;}
+.ti{padding:9px 13px;font-size:12px;color:#48556A;border-bottom:1px solid #EBEBEB;line-height:1.55;}
+.ti:last-child{border-bottom:none;}
+.tc:first-child .ti{border-right:1px solid #EBEBEB;}
+.tl{padding-left:26px;position:relative;}
+.tl::before{content:'';position:absolute;left:7px;top:6px;bottom:6px;width:2px;background:#DEDBD4;}
+.tli{position:relative;padding-bottom:28px;}
+.tli:last-child{padding-bottom:0;}
+.dot{position:absolute;left:-26px;top:3px;width:14px;height:14px;border-radius:50%;background:#fff;border:2px solid #C8892A;z-index:1;}
+.dot.on{background:#C8892A;}
+.tph{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#C8892A;font-weight:700;margin-bottom:4px;}
+.ttl{font-size:13.5px;font-weight:600;color:#181E2C;margin-bottom:8px;}
+.tls{list-style:none;display:flex;flex-direction:column;gap:5px;}
+.tls li{font-size:12px;color:#48556A;padding-left:15px;position:relative;line-height:1.6;}
+.tls li::before{content:'–';position:absolute;left:0;color:#8A9AB0;}
+.gd{display:flex;gap:12px;margin-bottom:16px;align-items:flex-start;}
+.gn{width:24px;height:24px;border-radius:50%;background:#F4F3EF;border:1.5px solid #DEDBD4;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#C8892A;flex-shrink:0;margin-top:1px;}
+.gt{font-size:13px;font-weight:600;color:#181E2C;margin-bottom:3px;}
+.gb{font-size:12px;color:#48556A;line-height:1.65;}
+.kg{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;}
+.kc{flex:1;min-width:120px;background:#F4F3EF;border:1px solid #DEDBD4;border-radius:6px;padding:12px 14px;}
+.kl2{font-size:10px;color:#8A9AB0;letter-spacing:.08em;text-transform:uppercase;margin-bottom:5px;}
+.kt{font-size:19px;font-weight:700;color:#C8892A;line-height:1;margin-bottom:3px;}
+.kb{font-size:11px;color:#8A9AB0;}
+.ftr{background:#F4F3EF;border-top:1px solid #DEDBD4;padding:18px 40px;font-size:11px;color:#8A9AB0;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+p{color:#48556A;font-size:13px;line-height:1.75;margin-bottom:12px;}
+p:last-child{margin-bottom:0;}
+h3{font-family:Georgia,serif;font-size:14px;font-weight:normal;color:#181E2C;margin:22px 0 10px;}
+h3:first-child{margin-top:0;}
+strong{color:#181E2C;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="hdr">
+  <div class="hdr-ey">ORM Strategy Report · Confidential</div>
+  <div class="hdr-nm">${esc(clientName)}</div>
+  <div class="hdr-mt">Monitoring period: Last ${days} days &nbsp;·&nbsp; Generated: ${date}<br>Keywords: ${esc(discoverKeywords.join(", ") || clientName)} &nbsp;·&nbsp; Platforms: Instagram, Facebook, Twitter/X, YouTube</div>
+  <div class="hdr-kpis">
+    <div><div class="kv" style="color:#E8A94A;">${repScore}%</div><div class="kl">Rep Score</div></div>
+    <div><div class="kv" style="color:rgba(255,255,255,.85);">${total}</div><div class="kl">Influencers</div></div>
+    <div><div class="kv" style="color:#62DFA0;">${proCount}</div><div class="kl">Pro Voices</div></div>
+    <div><div class="kv" style="color:#FF9090;">${antiCount}</div><div class="kl">Anti Voices</div></div>
+    <div><div class="kv" style="color:#94B0D4;">${mixedCount}</div><div class="kl">Mixed / Neutral</div></div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="ey">01 — Situation Analysis</div>
+  <div class="st">Where ${esc(clientName)} Stands in the Influencer Landscape</div>
+  <div class="rule"></div>
+  <div class="score-row">
+    <div class="sc-num" style="color:${repColor};">${repScore}%</div>
+    <div class="sc-txt">
+      <div class="sc-lbl">Reputation Score: ${repLabel}</div>
+      <div class="sc-sub">Based on ${total} influencer account${total !== 1 ? "s" : ""} monitored over the last ${days} days. ${proP}% are active supporters, ${antiP}% are critics, and ${mixedP}% are neutral or mixed. ${repScore >= 70 ? "Strong foundation — focus on scaling advocacy and crisis preparedness." : repScore >= 50 ? "Mixed signals require strategic intervention to shift the balance toward pro voices." : "Critical situation — requires immediate reputation management action."}</div>
+      <div class="sbar">
+        <div style="width:${proP}%;background:#1E6B47;border-radius:3px;"></div>
+        <div style="width:${mixedP}%;background:#4A6080;"></div>
+        <div style="width:${antiP}%;background:#9B2F2F;border-radius:3px;"></div>
+      </div>
+      <div class="leg">
+        <span><span class="ld" style="background:#1E6B47;"></span>Pro ${proP}% (${proCount})</span>
+        <span><span class="ld" style="background:#4A6080;"></span>Mixed ${mixedP}% (${mixedCount})</span>
+        <span><span class="ld" style="background:#9B2F2F;"></span>Anti ${antiP}% (${antiCount})</span>
+      </div>
+    </div>
+  </div>
+  <div class="cards">
+    <div class="card"><div class="cl">${antiCount === 0 ? "Anti Voice Status" : "⚠ Critical Alert"}</div><div class="ct">${antiCount === 0 ? "0 Critics — Monitor Scope" : `${antiCount} Anti Voice${antiCount > 1 ? "s" : ""} — Respond Now`}</div><div class="cb">${antiCount === 0 ? "No anti voices detected. This may reflect limited monitoring scope rather than a safe environment. Expand keywords and platforms before concluding the landscape is risk-free." : `${antiCount} account${antiCount > 1 ? "s are" : " is"} actively critical. Each requires a documented factual response. Do not leave anti voices unaddressed for more than 24 hours.`}</div></div>
+    <div class="card"><div class="cl">Biggest Opportunity</div><div class="ct">${mixedCount > 0 ? `Convert ${mixedCount} Neutral Voice${mixedCount > 1 ? "s" : ""}` : "Build Influencer Ecosystem"}</div><div class="cb">${mixedCount > 0 ? `${mixedP}% of influencers are Mixed/Neutral — unconvinced, not opposed. Targeted content and direct engagement can shift a meaningful portion to active Pro supporters.` : "The monitoring pool is limited. Expand keyword coverage and run targeted discovery to build an independent advocate network."}</div></div>
+    <div class="card"><div class="cl">Data Coverage</div><div class="ct">${total < 15 ? "Limited Sample — Expand" : "Baseline Established"}</div><div class="cb">${total < 15 ? `Only ${total} account${total !== 1 ? "s" : ""} tracked. Expand keywords, add LinkedIn and Telegram, and run monthly (not quarterly) monitoring cycles to build a reliable picture.` : `${total} accounts provide a baseline. Focus on keyword quality — ensure clusters reflect real topics. Monthly monitoring is recommended.`}</div></div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="ey">02 — Ecosystem Map</div>
+  <div class="st">Who Is Talking About ${esc(clientName)}</div>
+  <div class="rule"></div>
+  <p>The accounts below are the complete influencer monitoring pool for this period. Review each for account type and strategic significance before acting on aggregate statistics.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Handle</th><th>Sentiment</th><th style="text-align:right;">Posts</th><th style="text-align:right;">Pro</th><th style="text-align:right;">Anti</th><th>Keywords</th></tr></thead>
+    <tbody>${influencerRows || `<tr><td colspan="6" style="padding:20px;text-align:center;color:#8A9AB0;">No influencers tracked yet — run keyword discovery to populate.</td></tr>`}</tbody>
+  </table></div>
+</div>
+
+<div class="sec">
+  <div class="ey">03 — ORM Strategy</div>
+  <div class="st">Three Strategic Priorities for the Next 90 Days</div>
+  <div class="rule"></div>
+  <div class="pils">
+    <div class="pil"><div class="pn">Priority 01</div><div class="pt">${antiCount > 0 ? "Address Active Critics With Evidence" : "Build an Independent Advocate Network"}</div><div class="pb">${esc(pri1)}</div></div>
+    <div class="pil"><div class="pn">Priority 02</div><div class="pt">${mixedCount > 5 ? "Convert Neutral Voices to Supporters" : "Expand the Monitoring Ecosystem"}</div><div class="pb">${esc(pri2)}</div></div>
+    <div class="pil"><div class="pn">Priority 03</div><div class="pt">Build Pre-Crisis Communication Capacity</div><div class="pb">${esc(pri3)}</div></div>
+  </div>
+  <h3>Platform Strategy</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Platform</th><th>Primary Role</th><th>Content Type</th><th>Cadence</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Twitter / X</strong></td><td style="font-size:12px;color:#48556A;">Real-time advocacy, rapid response</td><td style="font-size:12px;color:#48556A;">Case updates, milestones, thread documentation</td><td style="font-size:12px;color:#48556A;">Daily</td></tr>
+      <tr style="background:#F9F9F7;"><td><strong>Instagram</strong></td><td style="font-size:12px;color:#48556A;">Human-interest storytelling</td><td style="font-size:12px;color:#48556A;">Stories, infographics, visual documentation</td><td style="font-size:12px;color:#48556A;">3–4× / week</td></tr>
+      <tr><td><strong>Facebook</strong></td><td style="font-size:12px;color:#48556A;">Community engagement</td><td style="font-size:12px;color:#48556A;">Reports, events, explainers, updates</td><td style="font-size:12px;color:#48556A;">4–5× / week</td></tr>
+      <tr style="background:#F9F9F7;"><td><strong>YouTube</strong></td><td style="font-size:12px;color:#48556A;">Long-form credibility</td><td style="font-size:12px;color:#48556A;">Documentaries, analysis, event recordings</td><td style="font-size:12px;color:#48556A;">1–2× / month</td></tr>
+      <tr><td><strong>LinkedIn</strong></td><td style="font-size:12px;color:#48556A;">Professional network</td><td style="font-size:12px;color:#48556A;">Reports, case outcomes, team updates</td><td style="font-size:12px;color:#48556A;">2–3× / week</td></tr>
+    </tbody>
+  </table></div>
+</div>
+
+<div class="sec">
+  <div class="ey">04 — Narrative Architecture</div>
+  <div class="st">How ${esc(clientName)} Should Frame Its Story</div>
+  <div class="rule"></div>
+  <div class="narr"><div class="nl">Core Narrative Statement</div><div class="ns">"${esc(clientName)} exists to ensure that <span class="ne">every stakeholder's rights and interests</span> are defended — through transparency, documented accountability, and the public good."</div></div>
+  <h3>Message Pillars</h3>
+  <div class="mps">
+    <div class="mp"><div class="mpt">Documented Impact</div><div class="mpb">Lead with verified outcomes: milestones achieved, communities served, problems solved. Numbers and records are the most credible validators in a contested information environment.</div></div>
+    <div class="mp"><div class="mpt">Principled Authority</div><div class="mpb">Communicate through experts and official records. Third-party credibility — expert citations, official reports, partner endorsements — builds authority that self-promotion cannot.</div></div>
+    <div class="mp"><div class="mpt">Community Voice</div><div class="mpb">Amplify stakeholder voices with consent and dignity. Their accounts validate ground-level presence without the organization speaking on their behalf.</div></div>
+    <div class="mp"><div class="mpt">Coalition Building</div><div class="mpb">Publicly name partner organizations and collaborative outcomes. Organizations with visible support networks are harder to isolate or discredit.</div></div>
+  </div>
+  <h3>Tone Guidelines</h3>
+  <div class="tone">
+    <div class="tc"><div class="th do">Always Do</div><div class="ti">Speak in facts, verified records, and documented outcomes</div><div class="ti">Acknowledge complexity and due process at all times</div><div class="ti">Center the dignity and agency of stakeholders served</div><div class="ti">Engage critics with evidence, not emotion or counter-attack</div><div class="ti">Build alliances publicly — name partners and collaborators</div></div>
+    <div class="tc"><div class="th av">Always Avoid</div><div class="ti">Rhetorical attacks on any party, individual, or competitor</div><div class="ti">Claiming outcomes before they are confirmed and finalized</div><div class="ti">Engaging bad-faith actors directly on their own terms</div><div class="ti">Framing that positions ${esc(clientName)} as a political actor</div><div class="ti">Appearing to operate without coalition or third-party support</div></div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="ey">05 — 90-Day Roadmap</div>
+  <div class="st">Foundation → Activation → Amplification</div>
+  <div class="rule"></div>
+  <div class="tl">
+    <div class="tli"><div class="dot on"></div><div class="tph">Days 1–30 · Foundation</div><div class="ttl">Audit, expand monitoring, identify advocates</div><ul class="tls"><li>Expand keyword list — add name variations, related topics, key case names, and issue areas</li><li>Add LinkedIn to monitored platforms; add manual logging for Telegram and print media mentions</li><li>Remove false-positive handles from the monitoring pool to clean up the ecosystem data</li><li>Audit all existing owned social media — identify content gaps and inactive handles</li><li>Build a target list of 25 independent advocates: journalists, academics, sector experts</li><li>Document 10–15 key outcomes or milestones from the past 2–3 years for content repurposing</li></ul></div>
+    <div class="tli"><div class="dot on"></div><div class="tph">Days 31–60 · Activation</div><div class="ttl">Launch content and begin advocate engagement</div><ul class="tls"><li>Launch a weekly content series — one documented impact story or milestone per week</li><li>Begin 1:1 outreach to the top 10 target advocates — provide briefings, invite co-authorship</li><li>Publish an Impact Report (PDF + social summary) — designed for sharing with media and stakeholders</li><li>Pitch regional and sector media with story angles and press notes on 2–3 key current topics</li><li>Establish a rapid response protocol — designate a spokesperson, write pre-approved templates</li><li>Run the second monitoring cycle — compare against this baseline to measure coverage growth</li></ul></div>
+    <div class="tli"><div class="dot"></div><div class="tph">Days 61–90 · Amplification</div><div class="ttl">Scale, activate advocates, and measure</div><ul class="tls"><li>Activate 5–10 independent advocates into visible public positions — posts, co-authored content, media quotes</li><li>Host a virtual briefing for 10–15 journalists — establish ${esc(clientName)} as the go-to credible source</li><li>Launch long-form content (video, podcast, detailed report) demonstrating expertise and depth</li><li>Run the 90-day monitoring report — measure Rep Score (target: ${Math.min(repScore + 15, 100)}%+), influencer count (target: ${Math.max(total * 2, 20)}+), Pro% (target: ${Math.min(proP + 15, 60)}%+)</li><li>Present findings as a before/after comparison — the delta is the measurable ORM impact</li></ul></div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="ey">06 — Working Guidelines</div>
+  <div class="st">How to Execute ORM Day-to-Day</div>
+  <div class="rule"></div>
+  <div class="gd"><div class="gn">1</div><div><div class="gt">Monitor daily — respond to significant mentions within 4 hours</div><div class="gb">Set keyword alerts across all platforms. Any significant mention needs acknowledgment or a deliberate decision to stay silent within 4 hours on business days. Silence reads as absence.</div></div></div>
+  <div class="gd"><div class="gn">2</div><div><div class="gt">Never rebut bad-faith attacks on their terms — reframe with evidence</div><div class="gb">When attacked by partisan accounts, redirect to evidence: a verified record, a documented outcome. Direct rebuttals give attackers amplification; evidence-led redirects reframe the story.</div></div></div>
+  <div class="gd"><div class="gn">3</div><div><div class="gt">Separate owned, earned, and monitored channels</div><div class="gb">Owned channels publish the narrative. Earned channels (advocates, media) validate it. Monitored channels inform strategy. Don't use owned channels to punch back at critics.</div></div></div>
+  <div class="gd"><div class="gn">4</div><div><div class="gt">Run monthly monitoring reports — not quarterly</div><div class="gb">A hostile narrative can calcify in 10 days. Monthly reports allow tactical adjustments before framing becomes fixed. Quarterly reports are client summaries; monthly reports are operational tools.</div></div></div>
+  <div class="gd"><div class="gn">5</div><div><div class="gt">Maintain a 2-week advance content buffer at all times</div><div class="gb">Keep 10 pre-written posts, 5 designed graphics, and 3 rapid-response templates ready. Content produced under urgency skips review and makes errors that are expensive to correct.</div></div></div>
+  <div class="gd"><div class="gn">6</div><div><div class="gt">Define success metrics before every campaign — not after</div><div class="gb">Specify the ORM target before any content push: which accounts to convert, which Rep Score milestone to hit, which journalists to reach. Retrospective measurement without prospective goals is meaningless.</div></div></div>
+</div>
+
+<div class="sec">
+  <div class="ey">07 — Success Metrics</div>
+  <div class="st">What to Measure at 90 Days</div>
+  <div class="rule"></div>
+  <p>Targets are calibrated against the current baseline. Achieving these within 90 days represents meaningful ORM progress.</p>
+  <div class="kg">
+    <div class="kc"><div class="kl2">Rep Score</div><div class="kt">${Math.min(repScore + 15, 100)}%+</div><div class="kb">Baseline: ${repScore}%</div></div>
+    <div class="kc"><div class="kl2">Total Influencers</div><div class="kt">${Math.max(total * 2, 20)}+</div><div class="kb">Baseline: ${total}</div></div>
+    <div class="kc"><div class="kl2">Pro Voices</div><div class="kt">${Math.min(proP + 15, 60)}%+</div><div class="kb">Baseline: ${proP}%</div></div>
+    <div class="kc"><div class="kl2">Ind. Advocates</div><div class="kt">10 active</div><div class="kb">Baseline: ~0</div></div>
+    <div class="kc"><div class="kl2">Response Time</div><div class="kt">&lt;4 hrs</div><div class="kb">Baseline: Not set</div></div>
+    <div class="kc"><div class="kl2">Content Buffer</div><div class="kt">2-week</div><div class="kb">Baseline: Unknown</div></div>
+    <div class="kc"><div class="kl2">Earned Media</div><div class="kt">15+</div><div class="kb">Baseline: Not tracked</div></div>
+    <div class="kc"><div class="kl2">Monitor Cycle</div><div class="kt">Monthly</div><div class="kb">Baseline: Quarterly</div></div>
+  </div>
+  <div class="alert">
+    <strong>30-day check-in:</strong> The first milestone report should include expanded keyword results, a revised ecosystem map with noise removed, and first advocate outreach tracking. If Rep Score has not moved above ${repScore + 5}% at 30 days, the keyword strategy needs revision before the 60-day cycle.
+  </div>
+</div>
+
+<div class="ftr">
+  <div>ORM Strategy Report &nbsp;·&nbsp; ${esc(clientName)} &nbsp;·&nbsp; Last ${days} days ending ${date}</div>
+  <div>Generated by ORM CMS &nbsp;·&nbsp; Confidential — for client use only</div>
+</div>
+</div>
+</body></html>`;
+  }
+
   function previewReport() {
     const html = buildReportHtml();
     const w = window.open("", "_blank");
@@ -735,6 +1011,15 @@ ${antiCount > 0 ? `<div class="rec warn"><strong>⚠ Monitor ${antiCount} Anti V
             <Button variant="ghost" onClick={previewReport}
               className="flex items-center gap-1.5 text-sm border border-border">
               <Eye className="h-4 w-4" /> Preview Report
+            </Button>
+          )}
+          {discovered.length > 0 && (
+            <Button variant="ghost" onClick={() => {
+              const html = buildStrategyReportHtml();
+              const w = window.open("", "_blank");
+              if (w) { w.document.write(html); w.document.close(); }
+            }} className="flex items-center gap-1.5 text-sm border border-border border-amber-300 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20">
+              <FileDown className="h-4 w-4" /> Strategy Report
             </Button>
           )}
           {discovered.length > 0 && (
