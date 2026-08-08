@@ -432,6 +432,9 @@ export default function InfluencersPage() {
   const [discovering, setDiscovering]             = useState(false);
   const [discoverStatus, setDiscoverStatus]       = useState("");
   const [extractProgress, setExtractProgress]     = useState(0);
+  const [proCardsVisible, setProCardsVisible]     = useState(PAGE_SIZE);
+  const [antiCardsVisible, setAntiCardsVisible]   = useState(PAGE_SIZE);
+  const [mixedCardsVisible, setMixedCardsVisible] = useState(PAGE_SIZE);
   const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const autoDiscoveredRef = useRef<Set<string>>(new Set());
@@ -579,9 +582,10 @@ export default function InfluencersPage() {
       if (!list.length) return "";
       const rows = list.map((inf, idx) => {
         const topPost = inf.posts[0];
-        const postLink = topPost
-          ? `<a href="${esc(topPost.url)}" style="color:#1e40af;font-size:7.5pt;">${esc((topPost.content || topPost.url).slice(0, 80))}…</a>`
-          : (inf.profile_url ? `<a href="${esc(inf.profile_url)}" style="color:#1e40af;font-size:7.5pt;">View Profile →</a>` : "—");
+        const cleanContent = topPost ? stripHtml(topPost.content || "").slice(0, 90).trim() : "";
+        const postLink = topPost && topPost.url
+          ? `<a href="${esc(topPost.url)}" target="_blank" style="color:#1e40af;font-size:8pt;text-decoration:none;">${cleanContent ? esc(cleanContent) + "…" : "View Post →"}</a>`
+          : (inf.profile_url ? `<a href="${esc(inf.profile_url)}" target="_blank" style="color:#1e40af;font-size:8pt;">View Profile →</a>` : "—");
         const clusters = inf.keyword_clusters.slice(0, 4).map(k =>
           `<span style="display:inline-block;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:1px 6px;border-radius:8px;font-size:7pt;margin:1px;">#${esc(k)}</span>`
         ).join(" ");
@@ -1203,8 +1207,14 @@ strong{color:#181E2C;}
                 </span>
               </div>
               <div className="space-y-2">
-                {antiList.map(inf => <InfluencerCard key={inf.id} inf={inf} onRemove={removeInfluencer} />)}
+                {antiList.slice(0, antiCardsVisible).map(inf => <InfluencerCard key={inf.id} inf={inf} onRemove={removeInfluencer} />)}
               </div>
+              {antiCardsVisible < antiList.length && (
+                <button onClick={() => setAntiCardsVisible(v => v + PAGE_SIZE)}
+                  className="w-full rounded-lg border border-red-200 dark:border-red-800/40 py-2 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">
+                  Load more · {antiList.length - antiCardsVisible} remaining
+                </button>
+              )}
             </div>
           )}
 
@@ -1219,8 +1229,14 @@ strong{color:#181E2C;}
                 </span>
               </div>
               <div className="space-y-2">
-                {proList.map(inf => <InfluencerCard key={inf.id} inf={inf} onRemove={removeInfluencer} />)}
+                {proList.slice(0, proCardsVisible).map(inf => <InfluencerCard key={inf.id} inf={inf} onRemove={removeInfluencer} />)}
               </div>
+              {proCardsVisible < proList.length && (
+                <button onClick={() => setProCardsVisible(v => v + PAGE_SIZE)}
+                  className="w-full rounded-lg border border-emerald-200 dark:border-emerald-800/40 py-2 text-xs text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors">
+                  Load more · {proList.length - proCardsVisible} remaining
+                </button>
+              )}
             </div>
           )}
 
@@ -1235,8 +1251,14 @@ strong{color:#181E2C;}
                 </span>
               </div>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {mixedList.map(inf => <InfluencerCard key={inf.id} inf={inf} onRemove={removeInfluencer} />)}
+                {mixedList.slice(0, mixedCardsVisible).map(inf => <InfluencerCard key={inf.id} inf={inf} onRemove={removeInfluencer} />)}
               </div>
+              {mixedCardsVisible < mixedList.length && (
+                <button onClick={() => setMixedCardsVisible(v => v + PAGE_SIZE)}
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-700/40 py-2 text-xs text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
+                  Load more · {mixedList.length - mixedCardsVisible} remaining
+                </button>
+              )}
             </div>
           )}
         </div>
