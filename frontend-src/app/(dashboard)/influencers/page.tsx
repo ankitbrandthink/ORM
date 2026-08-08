@@ -268,62 +268,83 @@ function InfluencerCard({ inf, onRemove }: { inf: Influencer; onRemove: (id: str
   );
 }
 
-// ── Viral Content Section ─────────────────────────────────────────────────────
+// ── Viral Posts Section (primary default view) ───────────────────────────────
 
-function ViralSection({ influencers }: { influencers: Influencer[] }) {
+function ViralSection({ influencers, clientName }: { influencers: Influencer[]; clientName: string }) {
+  const [showAll, setShowAll] = useState(false);
+  const LIMIT = 8;
+
+  // All posts across ALL platforms (no ig/fb filter here)
   const allPosts = influencers
-    .flatMap(inf => inf.posts.map(p => ({ ...p, handle: inf.handle, stance: inf.stance, profile_url: inf.profile_url, platform: inf.platform })))
-    .filter(p => p.content && p.url);
+    .flatMap(inf => inf.posts.map(p => ({ ...p, handle: inf.handle, stance: inf.stance, platform: inf.platform, profile_url: inf.profile_url })))
+    .filter(p => p.url);
 
-  const proViral  = allPosts.filter(p => p.stance === "Pro").slice(0, 3);
-  const antiViral = allPosts.filter(p => p.stance === "Anti").slice(0, 3);
+  const proViral  = allPosts.filter(p => p.stance === "Pro");
+  const antiViral = allPosts.filter(p => p.stance === "Anti");
+
+  const proShow  = showAll ? proViral  : proViral.slice(0, LIMIT);
+  const antiShow = showAll ? antiViral : antiViral.slice(0, LIMIT);
 
   if (proViral.length === 0 && antiViral.length === 0) return null;
 
+  function PostCard({ p, accent }: { p: typeof proViral[0]; accent: "pro" | "anti" }) {
+    const borderCls = accent === "pro"
+      ? "border-emerald-200 dark:border-emerald-800/40 bg-emerald-50 dark:bg-emerald-900/10 hover:bg-emerald-100 dark:hover:bg-emerald-900/20"
+      : "border-red-200 dark:border-red-800/40 bg-red-50 dark:bg-red-900/10 hover:bg-red-100 dark:hover:bg-red-900/20";
+    const iconCls = accent === "pro" ? "text-emerald-600" : "text-red-500";
+    // Strip Claude stance hint prefix from display content
+    const displayContent = p.content.replace(/^\[(?:Pro|Anti|Mixed) toward [^\]]+\]\s*/i, "");
+    return (
+      <a href={p.url} target="_blank" rel="noreferrer"
+        className={`block rounded-lg border p-2.5 transition-colors group ${borderCls}`}>
+        <div className="flex items-center gap-1.5 mb-1">
+          <PlatformIcon platform={p.platform} className={`h-3 w-3 ${iconCls}`} />
+          <span className="text-[11px] font-semibold text-accent">@{p.handle}</span>
+          <span className={cn("text-[9px] font-bold uppercase rounded-full px-1.5 py-px ml-auto",
+            accent === "pro" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300")}>
+            {platformLabel(p.platform)}
+          </span>
+        </div>
+        <p className="text-[11px] text-fg/80 line-clamp-2">{displayContent}</p>
+        <div className="flex items-center gap-1 mt-1.5 text-[10px] text-accent group-hover:underline">
+          <ExternalLink className="h-3 w-3" /> Open Post
+        </div>
+      </a>
+    );
+  }
+
   return (
     <div className="space-y-3">
-      <h2 className="text-base font-semibold flex items-center gap-2">
-        <Flame className="h-4 w-4 text-orange-500" /> Viral Content
-      </h2>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {proViral.length > 0 && (
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold flex items-center gap-2">
+          <Flame className="h-4 w-4 text-orange-500" />
+          Viral Posts — All Social Media
+          <span className="text-xs text-muted font-normal">Pro &amp; Anti voices for {clientName}</span>
+        </h2>
+        {(proViral.length > LIMIT || antiViral.length > LIMIT) && (
+          <button onClick={() => setShowAll(v => !v)}
+            className="text-xs text-accent underline hover:opacity-80">
+            {showAll ? "Show less" : `Show all ${proViral.length + antiViral.length} posts`}
+          </button>
+        )}
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {proShow.length > 0 && (
           <div className="space-y-2">
             <div className="text-xs font-semibold text-emerald-600 flex items-center gap-1.5">
-              <TrendingUp className="h-3.5 w-3.5" /> Pro Voices — Top Posts
+              <TrendingUp className="h-3.5 w-3.5" /> Pro Voices
+              <span className="ml-1 rounded-full bg-emerald-100 dark:bg-emerald-900/30 px-1.5 text-[10px]">{proViral.length}</span>
             </div>
-            {proViral.map((p, i) => (
-              <a key={i} href={p.url} target="_blank" rel="noreferrer"
-                className="block rounded-lg border border-emerald-200 dark:border-emerald-800/40 bg-emerald-50 dark:bg-emerald-900/10 p-2.5 hover:bg-emerald-100 dark:hover:bg-emerald-900/20 transition-colors group">
-                <div className="flex items-center gap-1.5 mb-1">
-                  <PlatformIcon platform={p.platform} className="h-3 w-3 text-emerald-600" />
-                  <span className="text-[11px] font-medium text-muted">@{p.handle}</span>
-                </div>
-                <div className="text-xs text-fg/80 line-clamp-2">{p.content}</div>
-                <div className="flex items-center gap-1 mt-1.5 text-[10px] text-accent group-hover:underline">
-                  <ExternalLink className="h-3 w-3" /> View Post
-                </div>
-              </a>
-            ))}
+            {proShow.map((p, i) => <PostCard key={i} p={p} accent="pro" />)}
           </div>
         )}
-        {antiViral.length > 0 && (
+        {antiShow.length > 0 && (
           <div className="space-y-2">
             <div className="text-xs font-semibold text-red-600 flex items-center gap-1.5">
-              <TrendingDown className="h-3.5 w-3.5" /> Anti Voices — Top Posts
+              <TrendingDown className="h-3.5 w-3.5" /> Anti Voices
+              <span className="ml-1 rounded-full bg-red-100 dark:bg-red-900/30 px-1.5 text-[10px]">{antiViral.length}</span>
             </div>
-            {antiViral.map((p, i) => (
-              <a key={i} href={p.url} target="_blank" rel="noreferrer"
-                className="block rounded-lg border border-red-200 dark:border-red-800/40 bg-red-50 dark:bg-red-900/10 p-2.5 hover:bg-red-100 dark:hover:bg-red-900/20 transition-colors group">
-                <div className="flex items-center gap-1.5 mb-1">
-                  <PlatformIcon platform={p.platform} className="h-3 w-3 text-red-600" />
-                  <span className="text-[11px] font-medium text-muted">@{p.handle}</span>
-                </div>
-                <div className="text-xs text-fg/80 line-clamp-2">{p.content}</div>
-                <div className="flex items-center gap-1 mt-1.5 text-[10px] text-accent group-hover:underline">
-                  <ExternalLink className="h-3 w-3" /> View Post
-                </div>
-              </a>
-            ))}
+            {antiShow.map((p, i) => <PostCard key={i} p={p} accent="anti" />)}
           </div>
         )}
       </div>
@@ -353,6 +374,8 @@ export default function InfluencersPage() {
   const [discoverPlatform, setDiscoverPlatform]   = useState<"twitter" | "instagram" | "facebook">("instagram");
   const [discovering, setDiscovering]             = useState(false);
   const [discoverStatus, setDiscoverStatus]       = useState("");
+  const [extractProgress, setExtractProgress]     = useState(0);
+  const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const autoDiscoveredRef = useRef<Set<string>>(new Set());
 
@@ -409,27 +432,41 @@ export default function InfluencersPage() {
     if (!clientId) return;
     const kw = discoverKeyword.trim() || clientName;
     if (!kw) return;
-    // Determine primary platform (twitter maps to instagram for IG/FB focus)
     const plat = discoverPlatform === "twitter" ? "instagram" : discoverPlatform;
     const companion = plat === "instagram" ? "facebook" : "instagram";
     setDiscovering(true);
-    setIgFbOnly(true);
-    setDiscoverStatus(`Extracting Instagram & Facebook handles for "${kw}"…`);
+    setIgFbOnly(false); // show all platforms so Twitter/YouTube aren't hidden
+    setExtractProgress(0);
+    setDiscoverStatus("");
+
+    // Animate progress bar: 0→90% over 35 s, then hold until results arrive
+    const startMs = Date.now();
+    const totalMs = 35000;
+    if (progressTimerRef.current) clearInterval(progressTimerRef.current);
+    progressTimerRef.current = setInterval(() => {
+      const p = Math.min(90, ((Date.now() - startMs) / totalMs) * 100);
+      setExtractProgress(p);
+      if (p >= 90) { clearInterval(progressTimerRef.current!); progressTimerRef.current = null; }
+    }, 300);
+
     try {
       await api.post("/social-listening/discover", {
         client_id: clientId, keyword: kw, platform: plat, limit: 50,
       });
-      // Fire companion platform in background
       api.post("/social-listening/discover", {
         client_id: clientId, keyword: kw, platform: companion, limit: 50,
       }).catch(() => {});
-      setDiscoverStatus("Extracting handles… Results appear in 20–40 seconds.");
       setTimeout(() => loadDiscovered(clientId, null), 20000);
-      setTimeout(() => { loadDiscovered(clientId, null); setDiscoverStatus(""); }, 40000);
+      setTimeout(() => {
+        loadDiscovered(clientId, null);
+        setExtractProgress(100);
+        setTimeout(() => { setExtractProgress(0); setDiscovering(false); }, 600);
+      }, 40000);
     } catch {
       setDiscoverStatus("Extraction failed. Please try again.");
-    } finally {
+      setExtractProgress(0);
       setDiscovering(false);
+      if (progressTimerRef.current) { clearInterval(progressTimerRef.current); progressTimerRef.current = null; }
     }
   }
 
@@ -623,11 +660,19 @@ ${antiCount > 0 ? `<div class="rec warn"><strong>⚠ Monitor ${antiCount} Anti V
             <option value={365}>Last year</option>
           </select>
           <Button onClick={handleExtract} disabled={discovering || !clientId}
-            className="flex items-center gap-1.5 text-sm">
-            {discovering
-              ? <RefreshCw className="h-4 w-4 animate-spin" />
-              : <Zap className="h-4 w-4" />}
-            {discovering ? "Extracting…" : "Extract Handles"}
+            className="relative overflow-hidden flex items-center gap-1.5 text-sm min-w-[158px] justify-center">
+            {/* progress fill layer */}
+            {discovering && (
+              <span
+                className="absolute inset-0 bg-white/20 transition-all ease-linear"
+                style={{ width: `${extractProgress}%`, transitionDuration: "300ms" }}
+              />
+            )}
+            <span className="relative z-10 flex items-center gap-1.5">
+              {discovering
+                ? <><RefreshCw className="h-4 w-4 animate-spin" />{Math.round(extractProgress)}%</>
+                : <><Zap className="h-4 w-4" />Extract Handles</>}
+            </span>
           </Button>
           {discovered.length > 0 && (
             <Button variant="ghost" onClick={previewReport}
@@ -775,6 +820,9 @@ ${antiCount > 0 ? `<div class="rec warn"><strong>⚠ Monitor ${antiCount} Anti V
         </div>
       )}
 
+      {/* ── Viral Posts (default primary view) ── */}
+      {discovered.length > 0 && <ViralSection influencers={discovered} clientName={clientName} />}
+
       {/* ── Influencer Accordion List ── */}
       {discovered.length === 0 && !discoverLoading && !discoverStatus ? (
         <Card className="py-8 text-center text-muted">
@@ -852,8 +900,6 @@ ${antiCount > 0 ? `<div class="rec warn"><strong>⚠ Monitor ${antiCount} Anti V
         </div>
       )}
 
-      {/* Viral Content */}
-      {filtered.length > 0 && <ViralSection influencers={filtered} />}
     </div>
   );
 }
