@@ -347,6 +347,7 @@ export default function InfluencersPage() {
   const [tierFilter, setTierFilter]         = useState<string>("all");
   const [platformFilter, setPlatformFilter] = useState<string>("all");
   const [activeKeyword, setActiveKeyword]   = useState<string | null>(null);
+  const [igFbOnly, setIgFbOnly]             = useState(true);
 
   const [discoverKeyword, setDiscoverKeyword]     = useState("");
   const [discoverPlatform, setDiscoverPlatform]   = useState<"twitter" | "instagram" | "facebook">("instagram");
@@ -433,6 +434,7 @@ export default function InfluencersPage() {
 
   // Apply filters
   const filtered = discovered.filter(inf => {
+    if (igFbOnly && inf.platform !== "instagram" && inf.platform !== "facebook") return false;
     if (stanceFilter !== "all" && inf.stance.toLowerCase() !== stanceFilter) return false;
     if (tierFilter !== "all" && inf.follower_tier !== "unknown" && inf.follower_tier !== tierFilter) return false;
     if (platformFilter !== "all" && inf.platform !== platformFilter) return false;
@@ -692,6 +694,20 @@ ${antiCount > 0 ? `<div class="rec warn"><strong>⚠ Monitor ${antiCount} Anti V
             ))}
           </>
         )}
+
+        {/* Platform scope toggle */}
+        <div className="mx-1 h-3.5 w-px bg-border" />
+        <button
+          onClick={() => setIgFbOnly(v => !v)}
+          className={cn(
+            "rounded-full px-3 py-1 text-xs font-medium flex items-center gap-1 transition-colors",
+            igFbOnly
+              ? "bg-pink-500 text-white"
+              : "bg-card border border-border text-muted hover:text-fg"
+          )}>
+          <InstagramIcon className="h-3 w-3" />
+          {igFbOnly ? "IG + FB Only" : "All Platforms"}
+        </button>
       </div>
 
       {/* ── Status banner ── */}
@@ -702,64 +718,79 @@ ${antiCount > 0 ? `<div class="rec warn"><strong>⚠ Monitor ${antiCount} Anti V
         </div>
       )}
 
-      {/* ── Two-column Pro/Anti grid ── */}
+      {/* ── Influencer Accordion List ── */}
       {discovered.length === 0 && !discoverLoading && !discoverStatus ? (
         <Card className="py-8 text-center text-muted">
           <Users className="mx-auto mb-2 h-8 w-8 opacity-20" />
           <p className="text-sm font-medium">No influencers discovered yet</p>
           <p className="mt-1 text-xs max-w-sm mx-auto">
-            Use the Discover section below to find Twitter/X and YouTube accounts talking about {clientName}.
+            Use the Discover section below — select Instagram or Facebook and enter a keyword to find accounts talking about {clientName || "the account"}.
           </p>
         </Card>
+      ) : filtered.length === 0 && !discoverLoading ? (
+        <Card className="py-6 text-center text-muted space-y-2">
+          <p className="text-sm font-medium">No Instagram / Facebook handles found yet</p>
+          <p className="text-xs max-w-sm mx-auto">
+            {discovered.length > 0
+              ? `${discovered.length} Twitter/YouTube handles exist. Click below to show them, or discover Instagram/Facebook accounts below.`
+              : "Use the Discover section to find Instagram and Facebook accounts."}
+          </p>
+          {discovered.length > 0 && (
+            <button onClick={() => setIgFbOnly(false)}
+              className="text-xs text-accent underline hover:opacity-80">
+              Show all {discovered.length} platforms
+            </button>
+          )}
+        </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-start">
-          {/* Pro Column */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-sm font-semibold text-emerald-600 sticky top-0 bg-background/90 py-1 z-10">
-              <TrendingUp className="h-4 w-4" />
-              Pro Voices
-              <span className="rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 text-xs font-bold ml-1">
-                {proList.length}
-              </span>
+        <div className="space-y-5">
+          {/* Anti first — usually the most populated group */}
+          {antiList.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm font-semibold text-red-600">
+                <TrendingDown className="h-4 w-4" />
+                Anti Voices
+                <span className="rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 px-2 py-0.5 text-xs font-bold ml-1">
+                  {antiList.length}
+                </span>
+              </div>
+              <div className="space-y-2">
+                {antiList.map(inf => <InfluencerCard key={inf.id} inf={inf} onRemove={removeInfluencer} />)}
+              </div>
             </div>
-            {proList.length === 0 ? (
-              <p className="text-xs text-muted px-1 py-2">No Pro voices for current filter.</p>
-            ) : (
-              proList.map(inf => <InfluencerCard key={inf.id} inf={inf} onRemove={removeInfluencer} />)
-            )}
-          </div>
+          )}
 
-          {/* Anti Column */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-sm font-semibold text-red-600 sticky top-0 bg-background/90 py-1 z-10">
-              <TrendingDown className="h-4 w-4" />
-              Anti Voices
-              <span className="rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 px-2 py-0.5 text-xs font-bold ml-1">
-                {antiList.length}
-              </span>
+          {/* Pro voices */}
+          {proList.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm font-semibold text-emerald-600">
+                <TrendingUp className="h-4 w-4" />
+                Pro Voices
+                <span className="rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 text-xs font-bold ml-1">
+                  {proList.length}
+                </span>
+              </div>
+              <div className="space-y-2">
+                {proList.map(inf => <InfluencerCard key={inf.id} inf={inf} onRemove={removeInfluencer} />)}
+              </div>
             </div>
-            {antiList.length === 0 ? (
-              <p className="text-xs text-muted px-1 py-2">No Anti voices for current filter.</p>
-            ) : (
-              antiList.map(inf => <InfluencerCard key={inf.id} inf={inf} onRemove={removeInfluencer} />)
-            )}
-          </div>
-        </div>
-      )}
+          )}
 
-      {/* Mixed voices */}
-      {mixedList.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-500">
-            <Minus className="h-4 w-4" />
-            Mixed / Neutral
-            <span className="rounded-full bg-slate-100 dark:bg-slate-700/40 text-slate-600 dark:text-slate-300 px-2 py-0.5 text-xs font-bold ml-1">
-              {mixedList.length}
-            </span>
-          </div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {mixedList.map(inf => <InfluencerCard key={inf.id} inf={inf} onRemove={removeInfluencer} />)}
-          </div>
+          {/* Mixed / Neutral */}
+          {mixedList.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-500">
+                <Minus className="h-4 w-4" />
+                Mixed / Neutral
+                <span className="rounded-full bg-slate-100 dark:bg-slate-700/40 text-slate-600 dark:text-slate-300 px-2 py-0.5 text-xs font-bold ml-1">
+                  {mixedList.length}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {mixedList.map(inf => <InfluencerCard key={inf.id} inf={inf} onRemove={removeInfluencer} />)}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

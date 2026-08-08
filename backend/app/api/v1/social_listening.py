@@ -112,6 +112,10 @@ async def _run_discovery(
             # Build profile URL
             if platform == "youtube":
                 profile_url = handle_posts[0].get("profile_url") or f"https://www.youtube.com/@{handle}"
+            elif platform == "instagram":
+                profile_url = handle_posts[0].get("profile_url") or f"https://www.instagram.com/{handle}"
+            elif platform == "facebook":
+                profile_url = handle_posts[0].get("profile_url") or f"https://www.facebook.com/{handle}"
             else:
                 profile_url = handle_posts[0].get("profile_url") or f"https://x.com/{handle}"
 
