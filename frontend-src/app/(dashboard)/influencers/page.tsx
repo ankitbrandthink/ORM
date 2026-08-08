@@ -277,6 +277,7 @@ function stripHtml(text: string): string {
     .replace(/^\[(?:Pro|Anti|Mixed) toward [^\]]+\]\s*/i, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/^[^<>]*>\s*/g, "")
+    .replace(/^<[^>]+/, "")
     .replace(/&[a-zA-Z]+;/g, " ")
     .replace(/\s+/g, " ")
     .trim();
