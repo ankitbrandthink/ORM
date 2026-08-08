@@ -802,8 +802,11 @@ def _extract_ig_fb_handles_from_html(html: str, keyword: str) -> list[dict]:
         pos = html.find(f"instagram.com/{handle}")
         snippet = ""
         if pos >= 0:
-            chunk = unescape(re.sub(r"<[^>]+>", " ", html[max(0, pos - 150):pos + 500]))
-            snippet = re.sub(r"\s+", " ", chunk).strip()[:350]
+            raw = html[max(0, pos - 100):pos + 300]
+            stripped = re.sub(r"<[^>]+>", " ", raw)
+            stripped = re.sub(r"^[^<]*?>", " ", stripped)  # remove partial-tag remnant at start
+            chunk = unescape(stripped)
+            snippet = re.sub(r"\s+", " ", chunk).strip()[:250]
         snippet = snippet or f"Instagram account posting about {keyword}"
 
         results.append({
@@ -833,8 +836,11 @@ def _extract_ig_fb_handles_from_html(html: str, keyword: str) -> list[dict]:
         pos = html.find(f"facebook.com/{handle}")
         snippet = ""
         if pos >= 0:
-            chunk = unescape(re.sub(r"<[^>]+>", " ", html[max(0, pos - 150):pos + 500]))
-            snippet = re.sub(r"\s+", " ", chunk).strip()[:350]
+            raw = html[max(0, pos - 100):pos + 300]
+            stripped = re.sub(r"<[^>]+>", " ", raw)
+            stripped = re.sub(r"^[^<]*?>", " ", stripped)  # remove partial-tag remnant at start
+            chunk = unescape(stripped)
+            snippet = re.sub(r"\s+", " ", chunk).strip()[:250]
         snippet = snippet or f"Facebook page posting about {keyword}"
 
         results.append({
