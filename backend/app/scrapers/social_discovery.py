@@ -643,6 +643,243 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
     return merged
 
 
+# ── Instagram / Facebook via Bing ─────────────────────────────────────────────
+
+# URL path segments that are NOT Instagram usernames
+_INSTAGRAM_SKIP_PATHS = {
+    "p", "reel", "tv", "reels", "explore", "accounts", "stories", "direct",
+    "directory", "about", "help", "privacy", "terms", "legal", "api",
+    "static", "cdn-cgi", "images", "video", "safety", "challenge", "embed",
+    "s", "ar", "en", "hi", "web", "graphql", "ajax", "music", "audio",
+    "hashtag", "location", "tags",
+}
+
+# URL path segments that are NOT Facebook page names
+_FACEBOOK_SKIP_PATHS = {
+    "pages", "groups", "events", "marketplace", "watch", "gaming", "stories",
+    "fundraisers", "help", "privacy", "terms", "legal", "business", "ads",
+    "developer", "media", "dialog", "photo", "video", "share", "sharer",
+    "plugins", "permalink", "login", "logout", "register", "settings",
+    "notifications", "home", "people", "search", "about", "hashtag", "pg",
+    "photos", "videos", "posts", "profile.php", "story.php",
+}
+
+
+async def _search_bing_instagram(keyword: str, limit: int, session) -> list[dict]:
+    """Search Bing for Instagram accounts posting about keyword."""
+    from html import unescape
+
+    results: list[dict] = []
+    seen_handles: set = set()
+
+    queries = [
+        f'site:instagram.com "{keyword}"',
+        f'site:instagram.com {keyword} India',
+    ]
+
+    # Match instagram.com/username (not /p/ /reel/ /tv/ paths)
+    handle_pat = re.compile(
+        r'instagram\.com/([A-Za-z0-9_.]{3,50})(?:/|\s|"|\'|\)|>|&|$)',
+    )
+    post_pat = re.compile(
+        r'(https?://(?:www\.)?instagram\.com/(?:p|reel|tv)/[A-Za-z0-9_-]{5,20}/?)',
+    )
+
+    for query in queries:
+        if len(results) >= limit:
+            break
+        try:
+            r = await session.get(
+                f"https://www.bing.com/search?q={quote_plus(query)}&count=50&setlang=en-US",
+                headers=_BING_HEADERS, timeout=15,
+            )
+            if r.status_code not in (200, 202):
+                logger.debug("Bing Instagram: %d for '%s'", r.status_code, query)
+                continue
+
+            html = r.text
+            for handle in handle_pat.findall(html):
+                if len(results) >= limit:
+                    break
+                h_lower = handle.lower()
+                if h_lower in _INSTAGRAM_SKIP_PATHS:
+                    continue
+                if _is_media_handle(handle, strict=True):
+                    continue
+                if handle in seen_handles:
+                    continue
+                seen_handles.add(handle)
+
+                url_pos = html.find(f"instagram.com/{handle}")
+                snippet = ""
+                post_links: list[str] = []
+                if url_pos >= 0:
+                    chunk = html[max(0, url_pos - 200):url_pos + 800]
+                    snippet = re.sub(r"<[^>]+>", " ", chunk)
+                    snippet = re.sub(r"\s+", " ", snippet).strip()
+                    snippet = unescape(snippet)[:400]
+                    post_links = post_pat.findall(chunk)[:4]
+                if not snippet or len(snippet) < 15:
+                    snippet = f"Instagram account posting about {keyword}"
+
+                # Emit one dict per post link found; fall back to profile entry
+                entries = []
+                for pl in post_links:
+                    entries.append({
+                        "handle": handle,
+                        "tweet_id": f"ig_post_{pl.split('/')[-2]}",
+                        "content": snippet,
+                        "url": pl,
+                        "published_at": datetime.now(timezone.utc).isoformat(),
+                        "platform": "instagram",
+                        "followers_count": None,
+                        "profile_url": f"https://www.instagram.com/{handle}/",
+                    })
+                if not entries:
+                    entries.append({
+                        "handle": handle,
+                        "tweet_id": f"ig_{handle}",
+                        "content": snippet,
+                        "url": f"https://www.instagram.com/{handle}/",
+                        "published_at": datetime.now(timezone.utc).isoformat(),
+                        "platform": "instagram",
+                        "followers_count": None,
+                        "profile_url": f"https://www.instagram.com/{handle}/",
+                    })
+                results.extend(entries[:2])
+
+        except Exception as e:
+            logger.debug("Bing Instagram error for '%s': %s", query, e)
+            continue
+
+    logger.info("Instagram search: %d entries for '%s'", len(results), keyword)
+    return results
+
+
+async def _search_bing_facebook(keyword: str, limit: int, session) -> list[dict]:
+    """Search Bing for Facebook pages/accounts posting about keyword."""
+    from html import unescape
+
+    results: list[dict] = []
+    seen_handles: set = set()
+
+    queries = [
+        f'site:facebook.com "{keyword}"',
+        f'site:facebook.com {keyword} India',
+    ]
+
+    # Match facebook.com/pagename (skip known non-page paths)
+    handle_pat = re.compile(
+        r'facebook\.com/([A-Za-z0-9_.]{3,100})(?:/|\s|"|\'|\)|>|&|$)',
+    )
+    post_pat = re.compile(
+        r'(https?://(?:www\.)?(?:m\.)?facebook\.com/[A-Za-z0-9_.]{3,100}/(?:posts|videos|photos)/[0-9]{5,}/?)',
+    )
+
+    for query in queries:
+        if len(results) >= limit:
+            break
+        try:
+            r = await session.get(
+                f"https://www.bing.com/search?q={quote_plus(query)}&count=50&setlang=en-US",
+                headers=_BING_HEADERS, timeout=15,
+            )
+            if r.status_code not in (200, 202):
+                logger.debug("Bing Facebook: %d for '%s'", r.status_code, query)
+                continue
+
+            html = r.text
+            for handle in handle_pat.findall(html):
+                if len(results) >= limit:
+                    break
+                h_lower = handle.lower()
+                if h_lower in _FACEBOOK_SKIP_PATHS:
+                    continue
+                if h_lower.startswith(("profile.php", "story.php", "sharer", "dialog")):
+                    continue
+                if _is_media_handle(handle, strict=True):
+                    continue
+                if handle in seen_handles:
+                    continue
+                seen_handles.add(handle)
+
+                url_pos = html.find(f"facebook.com/{handle}")
+                snippet = ""
+                post_links: list[str] = []
+                if url_pos >= 0:
+                    chunk = html[max(0, url_pos - 200):url_pos + 800]
+                    snippet = re.sub(r"<[^>]+>", " ", chunk)
+                    snippet = re.sub(r"\s+", " ", snippet).strip()
+                    snippet = unescape(snippet)[:400]
+                    post_links = post_pat.findall(chunk)[:4]
+                if not snippet or len(snippet) < 15:
+                    snippet = f"Facebook page posting about {keyword}"
+
+                entries = []
+                for pl in post_links:
+                    entries.append({
+                        "handle": handle,
+                        "tweet_id": f"fb_post_{pl.split('/')[-1]}",
+                        "content": snippet,
+                        "url": pl,
+                        "published_at": datetime.now(timezone.utc).isoformat(),
+                        "platform": "facebook",
+                        "followers_count": None,
+                        "profile_url": f"https://www.facebook.com/{handle}/",
+                    })
+                if not entries:
+                    entries.append({
+                        "handle": handle,
+                        "tweet_id": f"fb_{handle}",
+                        "content": snippet,
+                        "url": f"https://www.facebook.com/{handle}/",
+                        "published_at": datetime.now(timezone.utc).isoformat(),
+                        "platform": "facebook",
+                        "followers_count": None,
+                        "profile_url": f"https://www.facebook.com/{handle}/",
+                    })
+                results.extend(entries[:2])
+
+        except Exception as e:
+            logger.debug("Bing Facebook error for '%s': %s", query, e)
+            continue
+
+    logger.info("Facebook search: %d entries for '%s'", len(results), keyword)
+    return results
+
+
+async def search_instagram_facebook_keyword(keyword: str, limit: int = 30) -> list[dict]:
+    """Search Instagram + Facebook for influencer accounts about keyword via Bing."""
+    try:
+        import asyncio
+        import httpx
+    except ImportError:
+        return []
+
+    kw_clean = keyword.strip()
+    per = max(8, limit // 2)
+
+    async with httpx.AsyncClient(
+        headers=_BING_HEADERS, timeout=15, follow_redirects=True
+    ) as session:
+        ig_task = _search_bing_instagram(kw_clean, per, session)
+        fb_task = _search_bing_facebook(kw_clean, per, session)
+        ig_results, fb_results = await asyncio.gather(ig_task, fb_task)
+
+    # Interleave ig and fb results
+    merged: list[dict] = []
+    for ig, fb in zip(ig_results, fb_results):
+        merged.extend([ig, fb])
+    merged.extend(ig_results[len(fb_results):])
+    merged.extend(fb_results[len(ig_results):])
+
+    logger.info(
+        "social_discovery: %d ig + %d fb posts for '%s'",
+        len(ig_results), len(fb_results), kw_clean,
+    )
+    return merged[:limit]
+
+
 # ── Stance classification ─────────────────────────────────────────────────────
 
 _PRO_WORDS = {

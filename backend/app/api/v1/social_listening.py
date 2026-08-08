@@ -28,10 +28,11 @@ from app.scrapers.social_discovery import (
     extract_keyword_clusters,
     fetch_twitter_followers,
     is_valid_social_url,
+    search_instagram_facebook_keyword,
     search_twitter_keyword,
 )
 
-_ALLOWED_PLATFORMS = {"twitter", "youtube"}
+_ALLOWED_PLATFORMS = {"twitter", "youtube", "instagram", "facebook"}
 
 router = APIRouter(prefix="/social-listening", tags=["social-listening"])
 logger = logging.getLogger("orm.social_listening")
@@ -57,14 +58,16 @@ def _follower_tier(count: Optional[int]) -> str:
 
 # ── Background discovery task ────────────────────────────────────────────────
 
-async def _run_discovery(tenant_id: str, client_id: str, keyword: str, limit: int):
-    """Search Twitter/X & YouTube for keyword, classify stance, upsert records.
-
-    Media outlet handles and non-social URLs are excluded by social_discovery.py.
-    """
+async def _run_discovery(
+    tenant_id: str, client_id: str, keyword: str, limit: int, platform: str = "twitter"
+):
+    """Search social platforms for keyword, classify stance, upsert records."""
     db = SessionLocal()
     try:
-        tweets = await search_twitter_keyword(keyword, limit=limit)
+        if platform in ("instagram", "facebook", "meta"):
+            tweets = await search_instagram_facebook_keyword(keyword, limit=limit)
+        else:
+            tweets = await search_twitter_keyword(keyword, limit=limit)
         if not tweets:
             logger.info("social_listening: no posts found for '%s'", keyword)
             return
@@ -221,6 +224,7 @@ async def discover_influencers(
         client_id=req.client_id,
         keyword=kw,
         limit=min(req.limit, 60),
+        platform=req.platform,
     )
     return {"status": "discovery_started", "keyword": kw, "platform": req.platform}
 

@@ -348,9 +348,10 @@ export default function InfluencersPage() {
   const [platformFilter, setPlatformFilter] = useState<string>("all");
   const [activeKeyword, setActiveKeyword]   = useState<string | null>(null);
 
-  const [discoverKeyword, setDiscoverKeyword] = useState("");
-  const [discovering, setDiscovering]         = useState(false);
-  const [discoverStatus, setDiscoverStatus]   = useState("");
+  const [discoverKeyword, setDiscoverKeyword]     = useState("");
+  const [discoverPlatform, setDiscoverPlatform]   = useState<"twitter" | "instagram" | "facebook">("instagram");
+  const [discovering, setDiscovering]             = useState(false);
+  const [discoverStatus, setDiscoverStatus]       = useState("");
 
   const autoDiscoveredRef = useRef<Set<string>>(new Set());
 
@@ -386,9 +387,9 @@ export default function InfluencersPage() {
     if (autoDiscoveredRef.current.has(clientId)) return;
     autoDiscoveredRef.current.add(clientId);
     if (discoverKeywords.length === 0) {
-      setDiscoverStatus(`Auto-discovering influencers for "${clientName}" on Twitter/X & YouTube…`);
+      setDiscoverStatus(`Auto-discovering influencers for "${clientName}" on Instagram & Facebook…`);
       api.post("/social-listening/discover", {
-        client_id: clientId, keyword: clientName, platform: "twitter", limit: 50,
+        client_id: clientId, keyword: clientName, platform: "instagram", limit: 50,
       }).then(() => {
         setTimeout(() => loadDiscovered(clientId, null), 20000);
         setTimeout(() => { loadDiscovered(clientId, null); setDiscoverStatus(""); }, 35000);
@@ -406,10 +407,13 @@ export default function InfluencersPage() {
   async function handleDiscover() {
     if (!discoverKeyword.trim() || !clientId) return;
     setDiscovering(true);
-    setDiscoverStatus(`Searching Twitter/X & YouTube for "${discoverKeyword}"…`);
+    const platformDisplayName = discoverPlatform === "instagram" ? "Instagram"
+      : discoverPlatform === "facebook" ? "Facebook"
+      : "Twitter/X & YouTube";
+    setDiscoverStatus(`Searching ${platformDisplayName} for "${discoverKeyword}"…`);
     try {
       await api.post("/social-listening/discover", {
-        client_id: clientId, keyword: discoverKeyword.trim(), platform: "twitter", limit: 50,
+        client_id: clientId, keyword: discoverKeyword.trim(), platform: discoverPlatform, limit: 50,
       });
       setDiscoverStatus("Discovery running. Results appear in 20–40 seconds.");
       setDiscoverKeyword("");
@@ -582,7 +586,7 @@ ${antiCount > 0 ? `<div class="rec warn"><strong>⚠ Monitor ${antiCount} Anti V
             <Star className="h-6 w-6 text-accent" /> Influencer Intelligence
           </h1>
           <p className="text-sm text-muted">
-            Twitter/X &amp; YouTube influencers — Pro &amp; Anti voices for {clientName || "the connected account"}.
+            Instagram, Facebook, Twitter/X &amp; YouTube — Pro &amp; Anti voices for {clientName || "the connected account"}.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -789,20 +793,40 @@ ${antiCount > 0 ? `<div class="rec warn"><strong>⚠ Monitor ${antiCount} Anti V
               <Search className="h-4 w-4 text-accent" /> Discover Social Influencers
             </h2>
             <p className="text-xs text-muted">
-              Searches Twitter/X &amp; YouTube by keyword — AI classifies accounts as Pro or Anti toward {clientName || "the account"}.
-              Journals, media outlets &amp; press accounts are excluded automatically.
+              Searches Instagram, Facebook, Twitter/X &amp; YouTube by keyword — AI classifies accounts as Pro or Anti.
+              Only genuine social handles are shown; journals and media outlets are excluded automatically.
             </p>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-muted">
-            <TwitterIcon className="h-3.5 w-3.5 text-sky-500" />
+            <InstagramIcon className="h-3.5 w-3.5 text-pink-500" />
+            <span>Instagram</span>
+            <FacebookIcon className="h-3.5 w-3.5 text-blue-500 ml-1" />
+            <span>Facebook</span>
+            <TwitterIcon className="h-3.5 w-3.5 text-sky-500 ml-1" />
             <span>Twitter/X</span>
             <YouTubeIcon className="h-3.5 w-3.5 text-red-500 ml-1" />
             <span>YouTube</span>
-            <FacebookIcon className="h-3.5 w-3.5 text-blue-500 ml-1" />
-            <span className="opacity-50">Facebook</span>
-            <InstagramIcon className="h-3.5 w-3.5 text-pink-500 ml-1" />
-            <span className="opacity-50">Instagram</span>
           </div>
+        </div>
+
+        {/* Platform selector */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-muted font-medium shrink-0">Platform:</span>
+          {(["instagram", "facebook", "twitter"] as const).map(p => {
+            const active = discoverPlatform === p;
+            const color = p === "instagram"
+              ? active ? "bg-pink-500 text-white border-pink-500" : "border-pink-300 text-pink-600 dark:text-pink-400 hover:bg-pink-50 dark:hover:bg-pink-900/20"
+              : p === "facebook"
+              ? active ? "bg-blue-600 text-white border-blue-600" : "border-blue-300 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20"
+              : active ? "bg-sky-500 text-white border-sky-500" : "border-sky-300 text-sky-600 dark:text-sky-400 hover:bg-sky-50 dark:hover:bg-sky-900/20";
+            return (
+              <button key={p} onClick={() => setDiscoverPlatform(p)}
+                className={cn("rounded-full px-3 py-1 text-xs font-medium flex items-center gap-1.5 border transition-colors", color)}>
+                <PlatformIcon platform={p} className="h-3 w-3" />
+                {p === "instagram" ? "Instagram" : p === "facebook" ? "Facebook" : "Twitter/X + YouTube"}
+              </button>
+            );
+          })}
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
@@ -828,8 +852,8 @@ ${antiCount > 0 ? `<div class="rec warn"><strong>⚠ Monitor ${antiCount} Anti V
             <Globe className="mx-auto mb-2 h-7 w-7 opacity-20" />
             <p className="text-sm font-medium">No influencers discovered yet</p>
             <p className="mt-1 text-xs max-w-xs mx-auto">
-              Enter a keyword and click Discover Now. Only genuine social media influencers
-              on Twitter/X and YouTube are shown — media outlets are filtered out automatically.
+              Select a platform, enter a keyword (e.g. BJP, Congress, #RahulGandhi), and click Discover Now.
+              Only genuine social handles on Instagram, Facebook, Twitter/X &amp; YouTube are shown.
             </p>
           </div>
         )}
