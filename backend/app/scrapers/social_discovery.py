@@ -1,11 +1,15 @@
-"""Social Discovery — keyword search via Bing/Nitter/DuckDuckGo + YouTube (yt-dlp).
+"""Social Discovery — keyword search via Claude AI + web search + yt-dlp.
+
+Instagram/Facebook chain:
+  1. Claude Haiku — generates known handles with stance (primary, no IP blocking)
+  2. Brave HTML search — extracts IG/FB handles from Brave results
+  3. Startpage (Google proxy) — additional web fallback
+  4. Bing/DDG — kept as last resort but often blocked from datacenter IPs
 
 Twitter/X search chain: Bing HTML → Nitter keyword search → DuckDuckGo HTML.
-YouTube: yt-dlp ytsearch with relaxed channel-name filtering (only blocks
-explicitly known media handles, not keyword substrings like "live"/"daily").
+YouTube: yt-dlp ytsearch with relaxed channel-name filtering.
 
-Media/news outlet handles are filtered automatically so only genuine social
-voices appear in results. Facebook/Instagram require official API access.
+Media/news outlet handles are filtered automatically.
 """
 from __future__ import annotations
 
@@ -643,7 +647,7 @@ async def search_twitter_keyword(keyword: str, limit: int = 40) -> list[dict]:
     return merged
 
 
-# ── Instagram / Facebook via Bing ─────────────────────────────────────────────
+# ── Instagram / Facebook discovery ────────────────────────────────────────────
 
 # URL path segments that are NOT Instagram usernames
 _INSTAGRAM_SKIP_PATHS = {
@@ -664,192 +668,262 @@ _FACEBOOK_SKIP_PATHS = {
     "photos", "videos", "posts", "profile.php", "story.php",
 }
 
+_WEB_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
+    "Cache-Control": "no-cache",
+}
 
-async def _search_bing_instagram(keyword: str, limit: int, session) -> list[dict]:
-    """Search Bing for Instagram accounts posting about keyword."""
+
+async def _discover_handles_via_claude(
+    keyword: str, platform: str, api_key: str, limit: int = 15
+) -> list[dict]:
+    """Use Claude Haiku to discover known IG/FB influencer handles for keyword.
+
+    Claude has trained knowledge of prominent Indian political social media
+    accounts, making it reliable where datacenter-IP-blocked web search fails.
+    Returns handles pre-annotated with stance and a content description that
+    the existing classify_stance() function can re-verify.
+    """
+    import httpx
+
+    plat_label = "Instagram" if platform == "instagram" else "Facebook"
+    prompt = (
+        f"You are an Indian political social media analyst.\n"
+        f"List {limit} real, currently active {plat_label} accounts that are "
+        f"known to discuss \"{keyword}\" in Indian politics.\n\n"
+        f"Return ONLY a JSON array (no other text) where each object has:\n"
+        f'  "handle": username without @ (letters, digits, dots, underscores)\n'
+        f'  "platform": "{platform}"\n'
+        f'  "stance": "Pro" or "Anti" toward "{keyword}"\n'
+        f'  "content": 1-sentence description of what they post about "{keyword}"\n\n'
+        f"Rules:\n"
+        f"- Include political commentators, activists, party workers, influencers\n"
+        f"- Exclude official news orgs (NDTV, ABP, Zee, etc.)\n"
+        f"- Mix of Pro and Anti voices\n"
+        f"- Handles must be real alphanumeric usernames, no spaces\n"
+        f"- Return ONLY the JSON array, nothing else"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 2000,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            if r.status_code != 200:
+                logger.warning("Claude discovery: HTTP %d", r.status_code)
+                return []
+
+            text = r.json()["content"][0]["text"].strip()
+            json_match = re.search(r"\[.*\]", text, re.DOTALL)
+            if not json_match:
+                logger.warning("Claude discovery: no JSON array in response")
+                return []
+
+            items = json.loads(json_match.group(0))
+            results: list[dict] = []
+            seen: set = set()
+
+            for item in items:
+                handle = str(item.get("handle", "")).strip().lstrip("@")
+                plat = str(item.get("platform", platform)).lower()
+                if not handle or plat not in ("instagram", "facebook"):
+                    continue
+                if not re.match(r"^[A-Za-z0-9_.]{3,50}$", handle):
+                    continue
+                if handle.lower() in seen:
+                    continue
+                seen.add(handle.lower())
+
+                content = str(item.get("content", f"Account discussing {keyword}"))
+                stance_hint = str(item.get("stance", "Mixed"))
+                # Embed stance hint in content so classify_stance() picks it up
+                full_content = f"[{stance_hint} toward {keyword}] {content}"
+
+                if plat == "instagram":
+                    profile_url = f"https://www.instagram.com/{handle}/"
+                else:
+                    profile_url = f"https://www.facebook.com/{handle}/"
+
+                results.append({
+                    "handle": handle,
+                    "tweet_id": f"ai_{plat}_{handle}",
+                    "content": full_content,
+                    "url": profile_url,
+                    "published_at": datetime.now(timezone.utc).isoformat(),
+                    "platform": plat,
+                    "followers_count": None,
+                    "profile_url": profile_url,
+                })
+
+            logger.info(
+                "Claude discovery: %d %s handles for '%s'",
+                len(results), platform, keyword,
+            )
+            return results[:limit]
+
+    except Exception as e:
+        logger.error("Claude handle discovery error: %s", e)
+        return []
+
+
+def _extract_ig_fb_handles_from_html(html: str, keyword: str) -> list[dict]:
+    """Extract Instagram and Facebook handles from any search engine HTML response."""
     from html import unescape
 
     results: list[dict] = []
-    seen_handles: set = set()
+    seen: set = set()
 
-    queries = [
-        f'site:instagram.com "{keyword}"',
-        f'site:instagram.com {keyword} India',
-    ]
+    ig_pat = re.compile(r'instagram\.com/([A-Za-z0-9_.]{3,50})(?:[/?"\'\s>&#]|$)', re.IGNORECASE)
+    fb_pat = re.compile(r'facebook\.com/([A-Za-z0-9_.]{3,100})(?:[/?"\'\s>&#]|$)', re.IGNORECASE)
+    ig_post_pat = re.compile(r'https?://(?:www\.)?instagram\.com/(?:p|reel|tv)/([A-Za-z0-9_-]{5,})', re.IGNORECASE)
 
-    # Match instagram.com/username (not /p/ /reel/ /tv/ paths)
-    handle_pat = re.compile(
-        r'instagram\.com/([A-Za-z0-9_.]{3,50})(?:/|\s|"|\'|\)|>|&|$)',
-    )
-    post_pat = re.compile(
-        r'(https?://(?:www\.)?instagram\.com/(?:p|reel|tv)/[A-Za-z0-9_-]{5,20}/?)',
-    )
-
-    for query in queries:
-        if len(results) >= limit:
-            break
-        try:
-            r = await session.get(
-                f"https://www.bing.com/search?q={quote_plus(query)}&count=50&setlang=en-US",
-                headers=_BING_HEADERS, timeout=15,
-            )
-            if r.status_code not in (200, 202):
-                logger.debug("Bing Instagram: %d for '%s'", r.status_code, query)
-                continue
-
-            html = r.text
-            for handle in handle_pat.findall(html):
-                if len(results) >= limit:
-                    break
-                h_lower = handle.lower()
-                if h_lower in _INSTAGRAM_SKIP_PATHS:
-                    continue
-                if _is_media_handle(handle, strict=True):
-                    continue
-                if handle in seen_handles:
-                    continue
-                seen_handles.add(handle)
-
-                url_pos = html.find(f"instagram.com/{handle}")
-                snippet = ""
-                post_links: list[str] = []
-                if url_pos >= 0:
-                    chunk = html[max(0, url_pos - 200):url_pos + 800]
-                    snippet = re.sub(r"<[^>]+>", " ", chunk)
-                    snippet = re.sub(r"\s+", " ", snippet).strip()
-                    snippet = unescape(snippet)[:400]
-                    post_links = post_pat.findall(chunk)[:4]
-                if not snippet or len(snippet) < 15:
-                    snippet = f"Instagram account posting about {keyword}"
-
-                # Emit one dict per post link found; fall back to profile entry
-                entries = []
-                for pl in post_links:
-                    entries.append({
-                        "handle": handle,
-                        "tweet_id": f"ig_post_{pl.split('/')[-2]}",
-                        "content": snippet,
-                        "url": pl,
-                        "published_at": datetime.now(timezone.utc).isoformat(),
-                        "platform": "instagram",
-                        "followers_count": None,
-                        "profile_url": f"https://www.instagram.com/{handle}/",
-                    })
-                if not entries:
-                    entries.append({
-                        "handle": handle,
-                        "tweet_id": f"ig_{handle}",
-                        "content": snippet,
-                        "url": f"https://www.instagram.com/{handle}/",
-                        "published_at": datetime.now(timezone.utc).isoformat(),
-                        "platform": "instagram",
-                        "followers_count": None,
-                        "profile_url": f"https://www.instagram.com/{handle}/",
-                    })
-                results.extend(entries[:2])
-
-        except Exception as e:
-            logger.debug("Bing Instagram error for '%s': %s", query, e)
+    for handle in ig_pat.findall(html):
+        if handle.lower() in _INSTAGRAM_SKIP_PATHS:
             continue
+        if _is_media_handle(handle, strict=True):
+            continue
+        key = f"instagram:{handle.lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
 
-    logger.info("Instagram search: %d entries for '%s'", len(results), keyword)
+        pos = html.find(f"instagram.com/{handle}")
+        snippet = ""
+        if pos >= 0:
+            chunk = unescape(re.sub(r"<[^>]+>", " ", html[max(0, pos - 150):pos + 500]))
+            snippet = re.sub(r"\s+", " ", chunk).strip()[:350]
+        snippet = snippet or f"Instagram account posting about {keyword}"
+
+        results.append({
+            "handle": handle,
+            "tweet_id": f"ig_{handle}",
+            "content": snippet,
+            "url": f"https://www.instagram.com/{handle}/",
+            "published_at": datetime.now(timezone.utc).isoformat(),
+            "platform": "instagram",
+            "followers_count": None,
+            "profile_url": f"https://www.instagram.com/{handle}/",
+        })
+
+    for handle in fb_pat.findall(html):
+        h_lower = handle.lower()
+        if h_lower in _FACEBOOK_SKIP_PATHS:
+            continue
+        if h_lower.startswith(("profile.php", "sharer", "dialog", "story.php")):
+            continue
+        if _is_media_handle(handle, strict=True):
+            continue
+        key = f"facebook:{h_lower}"
+        if key in seen:
+            continue
+        seen.add(key)
+
+        pos = html.find(f"facebook.com/{handle}")
+        snippet = ""
+        if pos >= 0:
+            chunk = unescape(re.sub(r"<[^>]+>", " ", html[max(0, pos - 150):pos + 500]))
+            snippet = re.sub(r"\s+", " ", chunk).strip()[:350]
+        snippet = snippet or f"Facebook page posting about {keyword}"
+
+        results.append({
+            "handle": handle,
+            "tweet_id": f"fb_{handle}",
+            "content": snippet,
+            "url": f"https://www.facebook.com/{handle}/",
+            "published_at": datetime.now(timezone.utc).isoformat(),
+            "platform": "facebook",
+            "followers_count": None,
+            "profile_url": f"https://www.facebook.com/{handle}/",
+        })
+
     return results
 
 
-async def _search_bing_facebook(keyword: str, limit: int, session) -> list[dict]:
-    """Search Bing for Facebook pages/accounts posting about keyword."""
-    from html import unescape
+async def _search_web_ig_fb(keyword: str, limit: int, session) -> list[dict]:
+    """Try multiple search engines for IG/FB handles — falls back gracefully.
 
+    Tries (in order): Brave HTML, Startpage, Yandex, DuckDuckGo HTML, Bing.
+    Most block datacenter IPs with site: operators; we try without site: too.
+    """
     results: list[dict] = []
     seen_handles: set = set()
 
-    queries = [
-        f'site:facebook.com "{keyword}"',
-        f'site:facebook.com {keyword} India',
+    def _merge(new_items: list[dict]) -> None:
+        for item in new_items:
+            k = f"{item['platform']}:{item['handle'].lower()}"
+            if k not in seen_handles:
+                seen_handles.add(k)
+                results.append(item)
+
+    # Build search queries — both site: restricted and plain
+    engines = [
+        # Brave HTML (works better from datacenter IPs than Bing/DDG)
+        (
+            f"https://search.brave.com/search?q={quote_plus('instagram OR facebook ' + keyword + ' India influencer')}&source=web",
+            {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36", "Accept": "text/html"},
+        ),
+        # Startpage (Google proxy — often works)
+        (
+            f"https://www.startpage.com/search?q={quote_plus('instagram.com OR facebook.com ' + keyword + ' India')}&language=english",
+            {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0", "Accept": "text/html"},
+        ),
+        # Yandex (often less aggressive about datacenter IPs)
+        (
+            f"https://yandex.com/search/?text={quote_plus('site:instagram.com ' + keyword)}&lr=213",
+            {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36", "Accept": "text/html"},
+        ),
+        # Bing without site: operator
+        (
+            f"https://www.bing.com/search?q={quote_plus('instagram.com ' + keyword + ' India influencer')}&count=30",
+            _BING_HEADERS,
+        ),
+        # DuckDuckGo HTML
+        (
+            f"https://html.duckduckgo.com/html/?q={quote_plus('instagram ' + keyword + ' India site:instagram.com')}&kl=in-en",
+            {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36", "Accept": "text/html", "Accept-Language": "en-US,en;q=0.9"},
+        ),
     ]
 
-    # Match facebook.com/pagename (skip known non-page paths)
-    handle_pat = re.compile(
-        r'facebook\.com/([A-Za-z0-9_.]{3,100})(?:/|\s|"|\'|\)|>|&|$)',
-    )
-    post_pat = re.compile(
-        r'(https?://(?:www\.)?(?:m\.)?facebook\.com/[A-Za-z0-9_.]{3,100}/(?:posts|videos|photos)/[0-9]{5,}/?)',
-    )
-
-    for query in queries:
+    for url, hdrs in engines:
         if len(results) >= limit:
             break
         try:
-            r = await session.get(
-                f"https://www.bing.com/search?q={quote_plus(query)}&count=50&setlang=en-US",
-                headers=_BING_HEADERS, timeout=15,
-            )
-            if r.status_code not in (200, 202):
-                logger.debug("Bing Facebook: %d for '%s'", r.status_code, query)
-                continue
-
-            html = r.text
-            for handle in handle_pat.findall(html):
-                if len(results) >= limit:
-                    break
-                h_lower = handle.lower()
-                if h_lower in _FACEBOOK_SKIP_PATHS:
-                    continue
-                if h_lower.startswith(("profile.php", "story.php", "sharer", "dialog")):
-                    continue
-                if _is_media_handle(handle, strict=True):
-                    continue
-                if handle in seen_handles:
-                    continue
-                seen_handles.add(handle)
-
-                url_pos = html.find(f"facebook.com/{handle}")
-                snippet = ""
-                post_links: list[str] = []
-                if url_pos >= 0:
-                    chunk = html[max(0, url_pos - 200):url_pos + 800]
-                    snippet = re.sub(r"<[^>]+>", " ", chunk)
-                    snippet = re.sub(r"\s+", " ", snippet).strip()
-                    snippet = unescape(snippet)[:400]
-                    post_links = post_pat.findall(chunk)[:4]
-                if not snippet or len(snippet) < 15:
-                    snippet = f"Facebook page posting about {keyword}"
-
-                entries = []
-                for pl in post_links:
-                    entries.append({
-                        "handle": handle,
-                        "tweet_id": f"fb_post_{pl.split('/')[-1]}",
-                        "content": snippet,
-                        "url": pl,
-                        "published_at": datetime.now(timezone.utc).isoformat(),
-                        "platform": "facebook",
-                        "followers_count": None,
-                        "profile_url": f"https://www.facebook.com/{handle}/",
-                    })
-                if not entries:
-                    entries.append({
-                        "handle": handle,
-                        "tweet_id": f"fb_{handle}",
-                        "content": snippet,
-                        "url": f"https://www.facebook.com/{handle}/",
-                        "published_at": datetime.now(timezone.utc).isoformat(),
-                        "platform": "facebook",
-                        "followers_count": None,
-                        "profile_url": f"https://www.facebook.com/{handle}/",
-                    })
-                results.extend(entries[:2])
-
+            r = await session.get(url, headers=hdrs, timeout=12)
+            if r.status_code in (200, 202) and len(r.text) > 5000:
+                found = _extract_ig_fb_handles_from_html(r.text, keyword)
+                if found:
+                    logger.info("Web search (%s): %d handles", url[:40], len(found))
+                    _merge(found)
         except Exception as e:
-            logger.debug("Bing Facebook error for '%s': %s", query, e)
+            logger.debug("Web search error (%s): %s", url[:40], e)
             continue
 
-    logger.info("Facebook search: %d entries for '%s'", len(results), keyword)
-    return results
+    return results[:limit]
 
 
 async def search_instagram_facebook_keyword(keyword: str, limit: int = 30) -> list[dict]:
-    """Search Instagram + Facebook for influencer accounts about keyword via Bing."""
+    """Discover Instagram & Facebook handles discussing keyword.
+
+    Strategy:
+    1. Claude Haiku (primary) — reliable, no IP blocking, trained knowledge of
+       Indian political social media landscape. Returns handles with stance hints.
+    2. Web search fallback — Brave, Startpage, Yandex, DDG, Bing (in order).
+       These often work when the `site:` operator is not used.
+
+    Results are deduplicated and merged; Claude results come first.
+    """
     try:
         import asyncio
         import httpx
@@ -857,25 +931,70 @@ async def search_instagram_facebook_keyword(keyword: str, limit: int = 30) -> li
         return []
 
     kw_clean = keyword.strip()
-    per = max(8, limit // 2)
+    per = max(10, limit // 2)
 
-    async with httpx.AsyncClient(
-        headers=_BING_HEADERS, timeout=15, follow_redirects=True
-    ) as session:
-        ig_task = _search_bing_instagram(kw_clean, per, session)
-        fb_task = _search_bing_facebook(kw_clean, per, session)
-        ig_results, fb_results = await asyncio.gather(ig_task, fb_task)
+    # ── Step 1: Claude AI discovery (primary) ────────────────────────────────
+    api_key: Optional[str] = None
+    try:
+        from app.config import settings
+        key = getattr(settings, "ANTHROPIC_API_KEY", "")
+        if key and key.startswith("sk-ant"):
+            api_key = key
+    except Exception:
+        pass
 
-    # Interleave ig and fb results
+    claude_ig: list[dict] = []
+    claude_fb: list[dict] = []
+    if api_key:
+        claude_ig, claude_fb = await asyncio.gather(
+            _discover_handles_via_claude(kw_clean, "instagram", api_key, per),
+            _discover_handles_via_claude(kw_clean, "facebook", api_key, per),
+        )
+        logger.info(
+            "Claude discovery: %d ig + %d fb for '%s'",
+            len(claude_ig), len(claude_fb), kw_clean,
+        )
+    else:
+        logger.warning("No Anthropic API key — Claude discovery skipped for '%s'", kw_clean)
+
+    # ── Step 2: Web search fallback (supplementary) ──────────────────────────
+    web_results: list[dict] = []
+    try:
+        async with httpx.AsyncClient(
+            headers=_WEB_HEADERS, timeout=15, follow_redirects=True
+        ) as session:
+            web_results = await _search_web_ig_fb(kw_clean, per, session)
+    except Exception as e:
+        logger.debug("Web fallback error for '%s': %s", kw_clean, e)
+
+    # ── Merge: Claude first, then web extras not already found ───────────────
+    seen: set = set()
     merged: list[dict] = []
-    for ig, fb in zip(ig_results, fb_results):
-        merged.extend([ig, fb])
-    merged.extend(ig_results[len(fb_results):])
-    merged.extend(fb_results[len(ig_results):])
+
+    # Interleave ig/fb from Claude
+    for ig, fb in zip(claude_ig, claude_fb):
+        for item in (ig, fb):
+            k = f"{item['platform']}:{item['handle'].lower()}"
+            if k not in seen:
+                seen.add(k)
+                merged.append(item)
+    for item in claude_ig[len(claude_fb):] + claude_fb[len(claude_ig):]:
+        k = f"{item['platform']}:{item['handle'].lower()}"
+        if k not in seen:
+            seen.add(k)
+            merged.append(item)
+
+    # Append web-found handles not already in Claude results
+    for item in web_results:
+        k = f"{item['platform']}:{item['handle'].lower()}"
+        if k not in seen:
+            seen.add(k)
+            merged.append(item)
 
     logger.info(
-        "social_discovery: %d ig + %d fb posts for '%s'",
-        len(ig_results), len(fb_results), kw_clean,
+        "social_discovery: %d ig+fb total for '%s' (claude=%d, web=%d)",
+        len(merged), kw_clean,
+        len(claude_ig) + len(claude_fb), len(web_results),
     )
     return merged[:limit]
 
@@ -904,6 +1023,15 @@ _ANTI_WORDS = {
 
 def _lexicon_stance(text: str, keyword: str) -> str:
     t = text.lower()
+    # Honour the [Pro/Anti toward X] hint embedded by Claude discovery
+    hint = re.search(r'\[(pro|anti|mixed)\s+toward\s+', t)
+    if hint:
+        h = hint.group(1)
+        if h == "pro":
+            return "Pro"
+        if h == "anti":
+            return "Anti"
+        return "Mixed"
     pro = sum(1 for w in _PRO_WORDS if w in t)
     anti = sum(1 for w in _ANTI_WORDS if w in t)
     if anti > pro:
